@@ -1,0 +1,1181 @@
+#!/bin/bash
+
+# ============================================================
+#  GymLog APK Builder v2
+#  Features: Back button fix, date sorting, exercise sorting,
+#            muscle icons, 140+ exercises pre-populated
+#  Run with: chmod +x build-gymlog.sh && ./build-gymlog.sh
+# ============================================================
+
+set -e
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+NC='\033[0m'
+
+log()     { echo -e "${CYAN}[GymLog]${NC} $1"; }
+success() { echo -e "${GREEN}[✓]${NC} $1"; }
+warn()    { echo -e "${YELLOW}[!]${NC} $1"; }
+error()   { echo -e "${RED}[✗]${NC} $1"; exit 1; }
+step()    { echo -e "\n${BOLD}${CYAN}══ $1 ══${NC}"; }
+
+BUILD_DIR="/home/prasad/workspace/gym-log"
+SDK_DIR="$HOME/Android/Sdk"
+APP_DIR="$BUILD_DIR/gymlog-app"
+
+echo -e "\n${BOLD}${GREEN}"
+echo "  ██████╗ ██╗   ██╗███╗   ███╗██╗      ██████╗  ██████╗ "
+echo "  ██╔════╝╚██╗ ██╔╝████╗ ████║██║     ██╔═══██╗██╔════╝ "
+echo "  ██║  ███╗╚████╔╝ ██╔████╔██║██║     ██║   ██║██║  ███╗"
+echo "  ██║   ██║ ╚██╔╝  ██║╚██╔╝██║██║     ██║   ██║██║   ██║"
+echo "  ╚██████╔╝  ██║   ██║ ╚═╝ ██║███████╗╚██████╔╝╚██████╔╝"
+echo "   ╚═════╝   ╚═╝   ╚═╝     ╚═╝╚══════╝ ╚═════╝  ╚═════╝ "
+echo -e "${NC}"
+echo -e "  ${BOLD}APK Builder v2${NC}"
+echo -e "  ───────────────────────────────────────────\n"
+
+# ── Environment setup (all tools already installed) ──────────
+step "Step 1/4 — Setting up environment"
+
+export JAVA_HOME="/usr/lib/jvm/java-21-openjdk-amd64"
+export ANDROID_SDK_ROOT="$SDK_DIR"
+export ANDROID_HOME="$SDK_DIR"
+export PATH="$JAVA_HOME/bin:$PATH:$SDK_DIR/cmdline-tools/latest/bin:$SDK_DIR/platform-tools:$SDK_DIR/build-tools/34.0.0"
+
+success "Java:  $(java -version 2>&1 | head -1)"
+success "Node:  $(node --version)"
+success "SDK:   $SDK_DIR"
+
+# ── Create or reuse React app ─────────────────────────────────
+step "Step 2/4 — Setting up gymlog-app"
+
+mkdir -p "$BUILD_DIR"
+cd "$BUILD_DIR"
+
+if [ -d "$APP_DIR" ]; then
+  log "Found existing gymlog-app, skipping create-react-app..."
+else
+  log "First run — creating React app (2-3 minutes)..."
+  npx create-react-app gymlog-app --template cra-template 2>/dev/null
+  success "React app scaffolded"
+fi
+
+cd "$APP_DIR"
+success "Using gymlog-app at $APP_DIR"
+
+# ── Write source files ───────────────────────────────────────
+step "Step 3/4 — Writing GymLog v2 source code"
+
+log "Writing public/index.html..."
+cat > public/index.html << 'EOF'
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+    <meta name="theme-color" content="#0a0a0a" />
+    <title>GymLog</title>
+    <style>body{margin:0;background:#0a0a0a;}</style>
+  </head>
+  <body><div id="root"></div></body>
+</html>
+EOF
+
+log "Writing public/manifest.json..."
+cat > public/manifest.json << 'EOF'
+{"short_name":"GymLog","name":"GymLog - Exercise Tracker","start_url":".","display":"standalone","theme_color":"#0a0a0a","background_color":"#0a0a0a"}
+EOF
+
+log "Writing src/index.js..."
+cat > src/index.js << 'EOF'
+import React from 'react';
+import ReactDOM from 'react-dom/client';
+import App from './App';
+ReactDOM.createRoot(document.getElementById('root')).render(<React.StrictMode><App /></React.StrictMode>);
+EOF
+
+log "Writing src/App.js (v3 — session-first flow + sidebar)..."
+cat > src/App.js << 'APPEOF'
+import { useState, useEffect, useRef, useCallback } from "react";
+
+// Storage: WebView localStorage, physical path on Android:
+// /data/data/com.gymlog.app/app_webview/Default/Local Storage/leveldb/
+// Access via Android Studio → View → Tool Windows → Device File Explorer
+const STORAGE_KEY = "gymlog/v4/data";
+
+// ── Anatomical icons ────────────────────────────────────────
+const MuscleIcon = ({ muscle, size = 48 }) => {
+  const G="#4a4a4a", D="#333", R="#e8341a", S="#c42a12";
+  const Base = ({children}) => (
+    <svg viewBox="0 0 64 80" width={size} height={size}>
+      <ellipse cx="32" cy="7" rx="5" ry="6" fill={G}/>
+      <rect x="29" y="12" width="6" height="5" fill={G}/>
+      {children}
+      <path d="M14 17 Q8 20 8 32 L10 44 Q12 46 14 44 L16 32 Z" fill={G}/>
+      <path d="M50 17 Q56 20 56 32 L54 44 Q52 46 50 44 L48 32 Z" fill={G}/>
+      <path d="M14 54 L20 54 L22 72 L18 72 Z" fill={G}/>
+      <path d="M44 54 L50 54 L46 72 L42 72 Z" fill={G}/>
+      <path d="M26 54 L32 54 L32 72 L26 72 Z" fill={G}/>
+      <path d="M32 54 L38 54 L38 72 L32 72 Z" fill={G}/>
+    </svg>
+  );
+  const torso = <path d="M18 17 Q14 20 14 30 L14 54 L50 54 L50 30 Q50 20 46 17Z" fill={D}/>;
+  const icons = {
+    Chest:    <Base>{torso}<path d="M18 17 Q14 20 14 32 L32 30Z" fill={R}/><path d="M46 17 Q50 20 50 32 L32 30Z" fill={R}/><line x1="32" y1="17" x2="32" y2="32" stroke={S} strokeWidth="1"/></Base>,
+    Back:     <Base>{torso}<path d="M22 17 Q32 13 42 17 Q38 24 32 22 Q26 24 22 17Z" fill={R}/><path d="M14 20 Q14 38 20 42 L28 38 L24 20Z" fill={R}/><path d="M50 20 Q50 38 44 42 L36 38 L40 20Z" fill={R}/></Base>,
+    Legs:     <Base>{torso}<path d="M14 54 L20 54 L22 72 L18 72Z" fill={R}/><path d="M44 54 L50 54 L46 72 L42 72Z" fill={R}/><path d="M26 54 L32 54 L32 72 L26 72Z" fill={R} opacity="0.8"/><path d="M32 54 L38 54 L38 72 L32 72Z" fill={R} opacity="0.8"/></Base>,
+    Shoulders:<Base>{torso}<path d="M14 17 Q8 20 8 32 L10 44 Q12 46 14 44 L16 32Z" fill={R}/><path d="M50 17 Q56 20 56 32 L54 44 Q52 46 50 44 L48 32Z" fill={R}/><path d="M22 17 Q32 13 42 17 L44 22 Q32 19 20 22Z" fill={R}/></Base>,
+    Biceps:   <Base>{torso}<path d="M14 17 Q8 20 8 32 L10 44 Q12 46 14 44 L16 32Z" fill={G}/><ellipse cx="11" cy="28" rx="4" ry="7" fill={R}/><path d="M50 17 Q56 20 56 32 L54 44 Q52 46 50 44 L48 32Z" fill={G}/><ellipse cx="53" cy="28" rx="4" ry="7" fill={R}/></Base>,
+    Triceps:  <Base>{torso}<path d="M14 17 Q8 20 8 32 L10 44 Q12 46 14 44 L16 32Z" fill={G}/><path d="M8 22 Q5 30 8 38 Q12 42 15 38 Q13 30 13 22Z" fill={R}/><path d="M50 17 Q56 20 56 32 L54 44 Q52 46 50 44 L48 32Z" fill={G}/><path d="M56 22 Q59 30 56 38 Q52 42 49 38 Q51 30 51 22Z" fill={R}/></Base>,
+    Abs:      <Base>{torso}<rect x="25" y="28" width="6" height="5" rx="1.5" fill={R}/><rect x="33" y="28" width="6" height="5" rx="1.5" fill={R}/><rect x="25" y="35" width="6" height="5" rx="1.5" fill={R}/><rect x="33" y="35" width="6" height="5" rx="1.5" fill={R}/><rect x="25" y="42" width="6" height="4" rx="1.5" fill={R} opacity="0.8"/><rect x="33" y="42" width="6" height="4" rx="1.5" fill={R} opacity="0.8"/><line x1="32" y1="26" x2="32" y2="48" stroke={S} strokeWidth="1"/></Base>,
+  };
+  return icons[muscle] || <Base>{torso}<ellipse cx="32" cy="34" rx="8" ry="10" fill={R} opacity="0.7"/></Base>;
+};
+
+// ── Default data ─────────────────────────────────────────────
+const DEFAULT_MUSCLES = [
+  { id:"m1", name:"Chest", lastEdited:1000, exercises:[
+    "Barbell Bench Press","Incline Barbell Bench Press","Decline Barbell Bench Press",
+    "Reverse Grip Bench Press","Close Grip Bench Press","Dumbbell Bench Press",
+    "Incline Dumbbell Press","Decline Dumbbell Press","Dumbbell Fly","Incline Dumbbell Fly",
+    "Decline Dumbbell Fly","Dumbbell Pullover","Smith Machine Bench Press",
+    "Smith Machine Incline Press","Smith Machine Decline Press","Cable Fly (High to Low)",
+    "Cable Fly (Low to High)","Cable Fly (Mid)","Pec Deck Machine","Chest Press Machine",
+    "Plate Loaded Chest Press","Push-ups","Wide Push-ups","Decline Push-ups","Weighted Push-ups","Chest Dips"
+  ].map((name,i)=>({id:`e1_${i}`,name,sessions:[],lastEdited:1000+i}))},
+  { id:"m2", name:"Back", lastEdited:999, exercises:[
+    "Deadlift","Romanian Deadlift","Stiff Leg Deadlift","Barbell Row","Pendlay Row",
+    "Rack Pull","Meadows Row","Single Arm Dumbbell Row","Dumbbell Row","Incline Bench Dumbbell Row",
+    "Smith Machine Row","Lat Pulldown","Wide Grip Pulldown","Close Grip Pulldown",
+    "Reverse Grip Pulldown","Seated Cable Row","Straight Arm Pulldown","Face Pull",
+    "Pull-ups","Weighted Pull-ups","Chin-ups"
+  ].map((name,i)=>({id:`e2_${i}`,name,sessions:[],lastEdited:999+i}))},
+  { id:"m3", name:"Legs", lastEdited:998, exercises:[
+    "Barbell Squat","Front Squat","Romanian Deadlift","Stiff Leg Deadlift","Good Mornings",
+    "Barbell Hip Thrust","Dumbbell Squat","Goblet Squat","Walking Lunges","Reverse Lunges",
+    "Bulgarian Split Squat","Step Ups","Smith Machine Squat","Smith Machine Lunges",
+    "Smith Machine Hip Thrust","Leg Press","Hack Squat","Leg Extension",
+    "Leg Curl (Lying)","Leg Curl (Seated)","Standing Calf Raise","Seated Calf Raise",
+    "Leg Press Calf Raise","Donkey Calf Raise"
+  ].map((name,i)=>({id:`e3_${i}`,name,sessions:[],lastEdited:998+i}))},
+  { id:"m4", name:"Shoulders", lastEdited:997, exercises:[
+    "Barbell Overhead Press","Seated Barbell Press","Push Press","Behind the Neck Press",
+    "Upright Row","Dumbbell Shoulder Press","Arnold Press","Dumbbell Lateral Raise",
+    "Dumbbell Front Raise","Rear Delt Fly","Dumbbell Shrugs","Smith Machine Shoulder Press",
+    "Smith Machine Upright Row","Smith Machine Shrugs","Cable Lateral Raise","Cable Front Raise",
+    "Cable Rear Delt Fly","Machine Shoulder Press","Machine Lateral Raise","Reverse Pec Deck"
+  ].map((name,i)=>({id:`e4_${i}`,name,sessions:[],lastEdited:997+i}))},
+  { id:"m5", name:"Biceps", lastEdited:996, exercises:[
+    "Barbell Curl","EZ Bar Curl","Reverse Curl","Alternating Dumbbell Curl","Hammer Curl",
+    "Incline Dumbbell Curl","Concentration Curl","Zottman Curl","Cable Curl","Rope Cable Curl",
+    "Preacher Curl Machine","Cable Single Arm Curl"
+  ].map((name,i)=>({id:`e5_${i}`,name,sessions:[],lastEdited:996+i}))},
+  { id:"m6", name:"Triceps", lastEdited:995, exercises:[
+    "Skull Crushers","JM Press","Overhead Dumbbell Extension","Seated Overhead Extension",
+    "Dumbbell Skull Crushers","Tricep Kickbacks","Cable Pushdown","Rope Pushdown",
+    "Reverse Grip Pushdown","Cable Overhead Extension","Single Arm Pushdown",
+    "Bench Dips","Parallel Bar Dips","Weighted Dips"
+  ].map((name,i)=>({id:`e6_${i}`,name,sessions:[],lastEdited:995+i}))},
+  { id:"m7", name:"Abs", lastEdited:994, exercises:[
+    "Crunches","Weighted Crunch","Cable Crunch","Decline Sit-ups","Hanging Leg Raise",
+    "Hanging Knee Raise","Reverse Crunch","Russian Twist","Weighted Russian Twist",
+    "Plank","Side Plank","Ab Wheel Rollout","V-Ups","Toe Touches","Mountain Climbers"
+  ].map((name,i)=>({id:`e7_${i}`,name,sessions:[],lastEdited:994+i}))},
+];
+
+function uid(){ return Math.random().toString(36).slice(2,10)+Date.now().toString(36); }
+function fmtDate(iso){ return new Date(iso).toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric",year:"numeric"}); }
+function initData(){ try{ const s=localStorage.getItem(STORAGE_KEY); if(s) return JSON.parse(s); }catch{} return {muscles:DEFAULT_MUSCLES}; }
+
+function getAllSessions(muscles){
+  const out=[];
+  muscles.forEach(m=>m.exercises.forEach(e=>e.sessions.forEach(s=>
+    out.push({...s,mId:m.id,mName:m.name,eName:e.name,eId:e.id})
+  )));
+  return out.sort((a,b)=>new Date(b.date)-new Date(a.date));
+}
+function groupByDay(sessions){
+  const map={};
+  sessions.forEach(s=>{ if(!map[s.date]) map[s.date]=[]; map[s.date].push(s); });
+  return Object.keys(map).sort((a,b)=>new Date(b)-new Date(a)).map(date=>({date,sessions:map[date]}));
+}
+
+// ── Scroll-aware floating button hook ───────────────────────
+function useScrollVisible(containerRef){
+  const [visible,setVisible]=useState(true);
+  const lastY=useRef(0);
+  useEffect(()=>{
+    const el=containerRef.current;
+    if(!el) return;
+    const fn=()=>{
+      const y=el.scrollTop;
+      if(y<60){ setVisible(true); lastY.current=y; return; }
+      setVisible(y<lastY.current);
+      lastY.current=y;
+    };
+    el.addEventListener("scroll",fn,{passive:true});
+    return ()=>el.removeEventListener("scroll",fn);
+  },[]);
+  return visible;
+}
+
+export default function App(){
+  const [data,    setData]    = useState(initData);
+  const [screen,  setScreen]  = useState("home");
+  const [viewDay, setViewDay] = useState(null);
+  const [viewSid, setViewSid] = useState(null);
+  const [viewEx,  setViewEx]  = useState(null);
+  const [wizard,  setWizard]  = useState(null);
+  const [sidebar, setSidebar] = useState(false);
+  const [modal,   setModal]   = useState(null);
+  const [sbOpen,  setSbOpen]  = useState({});
+  const [calOpen, setCalOpen] = useState(false);  // calendar overlay
+  const sideRef    = useRef(null);
+  const scrollRef  = useRef(null);  // main scroll container for screens
+  const wScrollRef = useRef(null);  // wizard scroll container
+  const fabVisible    = useScrollVisible(scrollRef);
+  const wizFabVisible = useScrollVisible(wScrollRef);
+
+  useEffect(()=>{ try{localStorage.setItem(STORAGE_KEY,JSON.stringify(data));}catch{} },[data]);
+
+  // Close sidebar on outside tap
+  useEffect(()=>{
+    if(!sidebar) return;
+    const fn=e=>{ if(sideRef.current&&!sideRef.current.contains(e.target)) setSidebar(false); };
+    document.addEventListener("mousedown",fn);
+    document.addEventListener("touchstart",fn,{passive:true});
+    return ()=>{ document.removeEventListener("mousedown",fn); document.removeEventListener("touchstart",fn); };
+  },[sidebar]);
+
+  const capApp   = useRef(null);   // Capacitor App plugin ref for minimizeApp
+  const prevScreen = useRef("home"); // track where ExerciseDetail was opened from
+
+  // Capacitor back button
+  useEffect(()=>{
+    let h=null;
+    const go=async()=>{
+      try{
+        const {App}=await import('@capacitor/app');
+        capApp.current=App;
+        h=await App.addListener('backButton',handleBack);
+      }catch{
+        window.history.pushState({g:1},"");
+        const fn=()=>{ window.history.pushState({g:1},""); handleBack(); };
+        window.addEventListener("popstate",fn);
+        h={remove:()=>window.removeEventListener("popstate",fn)};
+      }
+    };
+    go(); return ()=>h?.remove();
+  },[modal,sidebar,calOpen,wizard,screen,viewDay,viewEx]);
+
+  function handleBack(){
+    if(modal){setModal(null);return;}
+    if(calOpen){setCalOpen(false);return;}
+    if(sidebar){setSidebar(false);return;}
+    if(wizard){
+      const {step}=wizard;
+      if(step==="sets")     {setWizard(w=>({...w,step:"exercise"}));return;}
+      if(step==="exercise") {setWizard(w=>({...w,step:"muscle"}));return;}
+      setWizard(null); return;
+    }
+    // exercise detail goes back to wherever it was opened from
+    if(screen==="exercise"){ setScreen(prevScreen.current); return; }
+    if(screen==="exHistory"){setScreen("home");return;}
+    if(screen==="day")     {setScreen("home");return;}
+    if(screen==="home"){
+      try{ capApp.current?.minimizeApp(); }catch{}
+    }
+  }
+
+  // ── Lookups ──────────────────────────────────────────────
+  const getMuscle = mId => data.muscles.find(m=>m.id===mId);
+  const getEx     = (mId,eId) => getMuscle(mId)?.exercises.find(e=>e.id===eId);
+  const getSess   = (mId,eId,sid) => getEx(mId,eId)?.sessions.find(s=>s.id===sid);
+  const sortEx    = es => [...es].sort((a,b)=>(b.lastEdited||0)-(a.lastEdited||0));
+  const sortSess  = ss => [...ss].sort((a,b)=>new Date(b.date)-new Date(a.date));
+
+  // ── Mutations ────────────────────────────────────────────
+  const addMuscle  = n => setData(d=>({...d,muscles:[...d.muscles,{id:uid(),name:n,lastEdited:Date.now(),exercises:[]}]}));
+  const delMuscle  = mId => setData(d=>({...d,muscles:d.muscles.filter(m=>m.id!==mId)}));
+  const addEx      = (mId,n)=>{
+    const now=Date.now();
+    setData(d=>({...d,muscles:d.muscles.map(m=>{
+      if(m.id!==mId) return m;
+      // Skip if exercise with same name already exists (case-insensitive)
+      const exists=m.exercises.some(e=>e.name.trim().toLowerCase()===n.trim().toLowerCase());
+      if(exists) return m;
+      return {...m,lastEdited:now,exercises:[...m.exercises,{id:uid(),name:n,sessions:[],lastEdited:now}]};
+    })}));
+  };
+  const delEx      = (mId,eId) => setData(d=>({...d,muscles:d.muscles.map(m=>m.id===mId?{...m,exercises:m.exercises.filter(e=>e.id!==eId)}:m)}));
+  const renameEx   = (mId,eId,name) => setData(d=>({...d,muscles:d.muscles.map(m=>m.id===mId?{...m,exercises:m.exercises.map(e=>e.id===eId?{...e,name}:e)}:m)}));
+  const addSession = (mId,eId,date)=>{
+    const s={id:uid(),date,note:"",sets:[]}; const now=Date.now();
+    setData(d=>({...d,muscles:d.muscles.map(m=>m.id===mId?{...m,lastEdited:now,exercises:m.exercises.map(e=>e.id===eId?{...e,lastEdited:now,sessions:[...e.sessions,s]}:e)}:m)}));
+    return s.id;
+  };
+  const delSession = (mId,eId,sid) => setData(d=>({...d,muscles:d.muscles.map(m=>m.id===mId?{...m,exercises:m.exercises.map(e=>e.id===eId?{...e,sessions:e.sessions.filter(s=>s.id!==sid)}:e)}:m)}));
+  const addSet     = (mId,eId,sid,weight,reps,note)=>{
+    const set={id:uid(),weight:weight||null,reps,note:note||""}; const now=Date.now();
+    setData(d=>({...d,muscles:d.muscles.map(m=>m.id===mId?{...m,lastEdited:now,exercises:m.exercises.map(e=>e.id===eId?{...e,lastEdited:now,sessions:e.sessions.map(s=>s.id===sid?{...s,sets:[...s.sets,set]}:s)}:e)}:m)}));
+  };
+  const delSet     = (mId,eId,sid,setId) => setData(d=>({...d,muscles:d.muscles.map(m=>m.id===mId?{...m,exercises:m.exercises.map(e=>e.id===eId?{...e,sessions:e.sessions.map(s=>s.id===sid?{...s,sets:s.sets.filter(t=>t.id!==setId)}:s)}:e)}:m)}));
+  const updateNote = (mId,eId,sid,note) => setData(d=>({...d,muscles:d.muscles.map(m=>m.id===mId?{...m,exercises:m.exercises.map(e=>e.id===eId?{...e,sessions:e.sessions.map(s=>s.id===sid?{...s,note}:s)}:e)}:m)}));
+
+  // ── Design tokens ────────────────────────────────────────
+  const C={green:"#c8f72c",bg:"#0a0a0a",card:"#111",border:"#1a1a1a",text:"#e8e8e8",muted:"#484848",dim:"#2a2a2a",red:"#e8341a"};
+  const T={fontFamily:"'DM Mono','Courier New',monospace"};
+  const hdr={background:"#0f0f0f",borderBottom:`1px solid ${C.border}`,padding:"44px 18px 16px",display:"flex",alignItems:"center",gap:12,position:"sticky",top:0,zIndex:20};
+  const ttl={fontSize:15,fontWeight:700,letterSpacing:2,textTransform:"uppercase",color:C.text,flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"};
+  const sub={fontSize:10,color:"#3a3a3a",letterSpacing:2,textTransform:"uppercase",marginTop:5};
+  const bkBtn={background:"none",border:"1px solid #2a2a2a",color:"#777",borderRadius:6,padding:"10px 14px",cursor:"pointer",fontSize:12,...T,letterSpacing:1,flexShrink:0};
+  const mnBtn={background:"none",border:"1px solid #2a2a2a",color:"#888",borderRadius:6,padding:"10px 14px",cursor:"pointer",fontSize:17,...T,flexShrink:0,lineHeight:1};
+  const crd={background:C.card,border:`1px solid ${C.border}`,borderRadius:10,margin:"8px 14px",padding:"14px",display:"flex",alignItems:"center",gap:12,cursor:"pointer"};
+  const dBtn={background:"none",border:"none",color:"#252525",cursor:"pointer",fontSize:18,padding:"6px 10px",borderRadius:4,lineHeight:1,flexShrink:0};
+  const sRow={background:C.card,border:"1px solid #171717",borderRadius:8,padding:"12px 14px",margin:"5px 14px",display:"flex",alignItems:"center",gap:8};
+  const inp={width:"100%",background:C.bg,border:"1px solid #1e1e1e",borderRadius:8,color:C.text,padding:"13px",fontSize:14,...T,marginBottom:10,outline:"none",boxSizing:"border-box"};
+  const rw={display:"flex",gap:8};
+  const btn=(a,d)=>({flex:1,padding:"14px",borderRadius:8,border:"none",background:d?"#280000":a?C.green:"#181818",color:d?"#ff4444":a?"#000":"#666",...T,fontSize:12,fontWeight:700,letterSpacing:1,cursor:"pointer",textTransform:"uppercase"});
+  const mpt={textAlign:"center",padding:"60px 20px",color:"#1e1e1e",fontSize:11,letterSpacing:2,textTransform:"uppercase",lineHeight:2.4};
+  const sLbl={fontSize:10,letterSpacing:3,color:"#2a2a2a",textTransform:"uppercase",padding:"18px 14px 8px"};
+  const nBox={background:"#0b1400",border:"1px solid #161e00",borderRadius:8,padding:"10px 13px",fontSize:12,color:"#476016",fontStyle:"italic",cursor:"pointer",lineHeight:1.5};
+
+  // ── Floating action button — scroll-aware ────────────────
+  // Appears at bottom-center, disappears on scroll down, reappears on scroll up
+  function FloatBtn({label, onClick, visible, right=false, left=false}){
+    const base={
+      position:"fixed", bottom:34, zIndex:15,
+      background:C.green, border:"none", color:"#000",
+      borderRadius:28, padding:"16px 28px",
+      fontSize:15, fontWeight:700, letterSpacing:1,...T,
+      cursor:"pointer", boxShadow:"0 4px 24px rgba(200,247,44,0.3)",
+      transition:"opacity 0.25s, transform 0.25s",
+      opacity: visible?1:0,
+      transform: visible?"translateY(0)":"translateY(20px)",
+      pointerEvents: visible?"auto":"none",
+      textTransform:"uppercase",
+      whiteSpace:"nowrap",
+    };
+    if(left)  base.left="14px";
+    else if(right) base.right="14px";
+    else { base.left="50%"; base.transform=(visible?"translateX(-50%)":"translateX(-50%) translateY(20px)"); }
+    return <button style={base} onClick={onClick}>{label}</button>;
+  }
+
+  // ── Modal wrapper ────────────────────────────────────────
+  const Wrap=({children})=>(
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.88)",display:"flex",alignItems:"flex-end",justifyContent:"center",zIndex:200}}
+      onMouseDown={e=>{if(e.target===e.currentTarget)setModal(null);}}>
+      <div style={{background:"#111",border:"1px solid #222",borderRadius:"16px 16px 0 0",padding:"24px 18px 36px",width:"100%",maxWidth:500,...T}}
+        onMouseDown={e=>e.stopPropagation()}>
+        {children}
+      </div>
+    </div>
+  );
+  const mTtl={fontSize:11,letterSpacing:3,color:"#444",textTransform:"uppercase",marginBottom:16};
+
+  function NameModal({title,ph,onAdd,checkDupe}){
+    const [v,sv]=useState("");
+    const dupe = checkDupe&&v.trim()&&checkDupe(v.trim());
+    const doAdd=()=>{ if(v.trim()&&!dupe){ onAdd(v.trim()); setModal(null); } };
+    return <Wrap>
+      <div style={mTtl}>{title}</div>
+      <input style={{...inp,borderColor:dupe?"#883300":"#1e1e1e"}} placeholder={ph} value={v} autoFocus
+        onChange={e=>sv(e.target.value)}
+        onKeyDown={e=>{if(e.key==="Enter") doAdd();}}/>
+      {dupe&&<div style={{fontSize:11,color:"#883300",marginBottom:10,marginTop:-6}}>Already exists — won't be added again</div>}
+      <div style={rw}>
+        <button style={btn()} onMouseDown={e=>{e.stopPropagation();setModal(null);}}>Cancel</button>
+        <button style={btn(true,!!dupe)} onMouseDown={e=>{e.stopPropagation();doAdd();}}>Add</button>
+      </div>
+    </Wrap>;
+  }
+
+  function EditExModal({mId,eId,current}){
+    const [v,sv]=useState(current);
+    const doSave=()=>{ if(v.trim()&&v.trim()!==current){ renameEx(mId,eId,v.trim()); } setModal(null); };
+    return <Wrap>
+      <div style={mTtl}>Rename Exercise</div>
+      <input style={inp} value={v} autoFocus
+        onChange={e=>sv(e.target.value)}
+        onKeyDown={e=>{if(e.key==="Enter") doSave();}}/>
+      <div style={rw}>
+        <button style={btn()} onMouseDown={e=>{e.stopPropagation();setModal(null);}}>Cancel</button>
+        <button style={btn(true)} onMouseDown={e=>{e.preventDefault();e.stopPropagation();doSave();}}>Save</button>
+      </div>
+    </Wrap>;
+  }
+
+  // Weight is now optional
+  function SetModal({mId,eId,sid}){
+    const [w,sw]=useState("");
+    const [r,sr]=useState("");
+    const [n,sn]=useState("");
+    const doLog=()=>{
+      if(!r){ return; } // reps required, weight optional
+      addSet(mId,eId,sid,w?parseFloat(w):null,parseInt(r),n);
+      setModal(null);
+    };
+    return <Wrap>
+      <div style={mTtl}>Log Set</div>
+      <div style={rw}>
+        <input style={{...inp,flex:1}} type="number" placeholder="Weight kg (opt)" value={w} autoFocus onChange={e=>sw(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")doLog();}}/>
+        <input style={{...inp,flex:1}} type="number" placeholder="Reps *" value={r} onChange={e=>sr(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")doLog();}}/>
+      </div>
+      <input style={inp} placeholder="Note (optional)" value={n} onChange={e=>sn(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")doLog();}}/>
+      {!r&&w&&<div style={{fontSize:11,color:"#883300",marginBottom:8}}>Reps are required</div>}
+      <div style={rw}>
+        <button style={btn()} onMouseDown={e=>{e.stopPropagation();setModal(null);}}>Cancel</button>
+        <button style={btn(true)} onMouseDown={e=>{e.stopPropagation();doLog();}}>Log Set</button>
+      </div>
+    </Wrap>;
+  }
+
+  function ConfirmModal({msg,onOk}){
+    return <Wrap>
+      <div style={{...mTtl,marginBottom:10}}>Confirm Delete</div>
+      <div style={{color:"#555",fontSize:13,marginBottom:22,lineHeight:1.7}}>{msg}</div>
+      <div style={rw}>
+        <button style={btn()} onMouseDown={e=>{e.stopPropagation();setModal(null);}}>Cancel</button>
+        <button style={btn(false,true)} onMouseDown={e=>{e.stopPropagation();onOk();setModal(null);}}>Delete</button>
+      </div>
+    </Wrap>;
+  }
+
+  // ── Set list ─────────────────────────────────────────────
+  function SetList({sets,mId,eId,sid}){
+    if(!sets.length) return <div style={mpt}>Tap + Log Set to add your first set</div>;
+    return sets.map((s,i)=>(
+      <div key={s.id} style={sRow}>
+        <span style={{fontSize:10,color:C.dim,letterSpacing:2,width:26,flexShrink:0}}>S{i+1}</span>
+        <div style={{flex:1}}>
+          <div style={{display:"flex",alignItems:"baseline",gap:4}}>
+            {s.weight!=null&&<><span style={{fontWeight:700,fontSize:18,color:C.green}}>{s.weight}</span><span style={{fontSize:10,color:C.dim}}>kg ×</span></>}
+            <span style={{fontWeight:700,fontSize:18,color:C.green}}>{s.reps}</span>
+            <span style={{fontSize:10,color:C.dim}}>reps</span>
+          </div>
+          {s.note&&<div style={{fontSize:11,color:"#385016",marginTop:2,fontStyle:"italic"}}>"{s.note}"</div>}
+        </div>
+        {s.weight!=null&&<span style={{fontSize:11,color:"#243810",marginRight:4,flexShrink:0}}>{Math.round(s.weight*s.reps)}kg</span>}
+        <button style={dBtn}
+          onClick={()=>setModal({type:"confirm",msg:`Delete set ${i+1}?`,onOk:()=>delSet(mId,eId,sid,s.id)})}
+          onMouseEnter={e=>e.currentTarget.style.color="#cc2222"}
+          onMouseLeave={e=>e.currentTarget.style.color="#252525"}>✕</button>
+      </div>
+    ));
+  }
+
+  // ── Stats bar ────────────────────────────────────────────
+  function StatsBar({sets}){
+    const vol=sets.filter(s=>s.weight!=null).reduce((a,s)=>a+s.weight*s.reps,0);
+    const max=sets.filter(s=>s.weight!=null).length?Math.max(...sets.filter(s=>s.weight!=null).map(s=>s.weight)):null;
+    return(
+      <div style={{display:"flex",borderBottom:"1px solid #131313",background:"#0d0d0d"}}>
+        {[{l:"Sets",v:sets.length},{l:"Volume",v:vol?`${vol}kg`:"—"},{l:"Max",v:max!=null?`${max}kg`:"—"}].map((x,i)=>(
+          <div key={x.l} style={{flex:1,padding:"14px 0",textAlign:"center",borderRight:i<2?"1px solid #131313":"none"}}>
+            <div style={{fontSize:20,fontWeight:700,color:C.green,...T}}>{x.v}</div>
+            <div style={{fontSize:9,color:C.dim,letterSpacing:2,textTransform:"uppercase",marginTop:2}}>{x.l}</div>
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  // ── Footer ───────────────────────────────────────────────
+  const Footer=()=>(
+    <div style={{textAlign:"center",padding:"28px 20px 40px",fontSize:11,color:"#222",letterSpacing:2,...T}}>
+      CREATED BY PRASAD
+    </div>
+  );
+
+  // ── SIDEBAR ───────────────────────────────────────────────
+  function Sidebar(){
+    const [sbSearch,setSbSearch]=useState("");
+    const trimmed=sbSearch.trim().toLowerCase();
+
+    // When searching: flatten all exercises across muscles, filter, show grouped
+    const allExFiltered = trimmed
+      ? data.muscles.flatMap(m=>
+          m.exercises
+            .filter(e=>e.name.toLowerCase().includes(trimmed))
+            .map(e=>({...e,mId:m.id,mName:m.name}))
+        )
+      : null;
+
+    const hiText=(name)=>{
+      if(!trimmed) return name;
+      const idx=name.toLowerCase().indexOf(trimmed);
+      if(idx<0) return name;
+      return <>{name.slice(0,idx)}<span style={{color:C.green,fontWeight:700}}>{name.slice(idx,idx+sbSearch.length)}</span>{name.slice(idx+sbSearch.length)}</>;
+    };
+
+    return <>
+      <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.65)",zIndex:50}}/>
+      <div ref={sideRef} style={{position:"fixed",top:0,left:0,bottom:0,width:"82%",maxWidth:340,
+        background:"#0f0f0f",borderRight:"1px solid #1e1e1e",zIndex:51,overflowY:"auto",display:"flex",flexDirection:"column",...T}}>
+
+        <div style={{padding:"44px 18px 14px",borderBottom:"1px solid #1a1a1a",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+          <div style={{fontSize:22,fontWeight:700,letterSpacing:3,textTransform:"uppercase",color:C.text}}>Muscles</div>
+          <button style={{background:"none",border:"none",color:"#555",fontSize:26,cursor:"pointer",padding:"2px 10px",lineHeight:1}}
+            onClick={()=>setSidebar(false)}>✕</button>
+        </div>
+
+        {/* Search bar */}
+        <div style={{padding:"10px 14px 10px",borderBottom:"1px solid #141414",background:"#0f0f0f",position:"sticky",top:0,zIndex:10}}
+          onMouseDown={e=>e.stopPropagation()}>
+          <div style={{position:"relative",display:"flex",alignItems:"center"}}>
+            <span style={{position:"absolute",left:13,fontSize:14,color:"#3a3a3a",pointerEvents:"none"}}>⌕</span>
+            <input
+              style={{...inp,marginBottom:0,paddingLeft:36,background:"#0a0a0a",border:"1px solid #1e1e1e",fontSize:14}}
+              placeholder="Search exercises…"
+              value={sbSearch}
+              onChange={e=>setSbSearch(e.target.value)}
+            />
+            {sbSearch&&<button
+              style={{position:"absolute",right:10,background:"none",border:"none",color:"#555",cursor:"pointer",fontSize:16,padding:"4px",lineHeight:1}}
+              onMouseDown={e=>{e.preventDefault();e.stopPropagation();setSbSearch("");}}>✕</button>}
+          </div>
+        </div>
+
+        {/* Search results mode */}
+        {allExFiltered ? (
+          <div>
+            {allExFiltered.length===0&&<div style={{...mpt,fontSize:12}}>No exercises match<br/>"{sbSearch}"</div>}
+            {allExFiltered.map(e=>{
+              const last=sortSess(e.sessions)[0];
+              const maxW=last?.sets.filter(s=>s.weight!=null).length?Math.max(...last.sets.filter(s=>s.weight!=null).map(s=>s.weight)):0;
+              return(
+                <div key={e.id}
+                  style={{display:"flex",alignItems:"center",padding:"12px 18px",borderBottom:"1px solid #111"}}
+                  onMouseDown={ev=>ev.stopPropagation()}>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontSize:16,color:"#bbb",cursor:"pointer",marginBottom:2}}
+                      onMouseDown={ev=>{ev.stopPropagation();setSidebar(false);setViewEx({mId:e.mId,eId:e.id});setScreen("exHistory");}}>
+                      {hiText(e.name)}
+                    </div>
+                    <div style={{fontSize:12,color:"#383838"}}>{e.mName}{maxW>0?` · ${maxW}kg`:""}</div>
+                  </div>
+                  <button style={{...dBtn,fontSize:14,color:"#2a2a2a",marginRight:2}}
+                    onMouseDown={ev=>{ev.preventDefault();ev.stopPropagation();setModal({type:"editEx",mId:e.mId,eId:e.id,current:e.name});}}
+                    onMouseEnter={ev=>ev.currentTarget.style.color="#c8f72c"}
+                    onMouseLeave={ev=>ev.currentTarget.style.color="#2a2a2a"}>✎</button>
+                  <button style={{...dBtn,fontSize:16,color:"#2a2a2a"}}
+                    onMouseDown={ev=>{ev.preventDefault();ev.stopPropagation();setModal({type:"confirm",msg:`Delete "${e.name}" and all its sessions?`,onOk:()=>delEx(e.mId,e.id)});}}
+                    onMouseEnter={ev=>ev.currentTarget.style.color="#cc2222"}
+                    onMouseLeave={ev=>ev.currentTarget.style.color="#2a2a2a"}>✕</button>
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          /* Normal muscle/exercise browse mode */
+          data.muscles.map(m=>(
+            <div key={m.id} style={{borderBottom:"1px solid #141414"}}>
+              <div style={{display:"flex",alignItems:"center",gap:12,padding:"16px 18px",cursor:"pointer"}}
+                onMouseDown={e=>{e.stopPropagation();setSbOpen(o=>({...o,[m.id]:!o[m.id]}));}}>
+                <MuscleIcon muscle={m.name} size={36}/>
+                <span style={{fontSize:22,fontWeight:700,color:"#ddd",flex:1,letterSpacing:0.5}}>{m.name}</span>
+                <span style={{fontSize:14,color:"#3a3a3a",marginRight:6}}>{m.exercises.length}</span>
+                <span style={{fontSize:14,color:"#3a3a3a"}}>{sbOpen[m.id]?"▲":"▼"}</span>
+              </div>
+              {sbOpen[m.id]&&(
+                <div style={{paddingBottom:8}}>
+                  {sortEx(m.exercises).map(e=>{
+                    const last=sortSess(e.sessions)[0];
+                    const maxW=last?.sets.filter(s=>s.weight!=null).length?Math.max(...last.sets.filter(s=>s.weight!=null).map(s=>s.weight)):0;
+                    return(
+                      <div key={e.id}
+                        style={{display:"flex",alignItems:"center",padding:"10px 18px 10px 68px",borderTop:"1px solid #111"}}
+                        onMouseDown={e=>e.stopPropagation()}>
+                        <span style={{flex:1,fontSize:16,color:"#888",cursor:"pointer"}}
+                          onMouseDown={ev=>{ev.stopPropagation();setSidebar(false);setViewEx({mId:m.id,eId:e.id});setScreen("exHistory");}}>
+                          {e.name}
+                        </span>
+                        {maxW>0&&<span style={{fontSize:13,color:"#2a2a2a",marginRight:10}}>{maxW}kg</span>}
+                        <button style={{...dBtn,fontSize:14,color:"#2a2a2a",marginRight:2}}
+                          onMouseDown={ev=>{ev.preventDefault();ev.stopPropagation();setModal({type:"editEx",mId:m.id,eId:e.id,current:e.name});}}
+                          onMouseEnter={ev=>ev.currentTarget.style.color="#c8f72c"}
+                          onMouseLeave={ev=>ev.currentTarget.style.color="#2a2a2a"}>✎</button>
+                        <button style={{...dBtn,fontSize:16,color:"#2a2a2a"}}
+                          onMouseDown={ev=>{ev.preventDefault();ev.stopPropagation();setModal({type:"confirm",msg:`Delete "${e.name}" and all its sessions?`,onOk:()=>delEx(m.id,e.id)});}}
+                          onMouseEnter={ev=>ev.currentTarget.style.color="#cc2222"}
+                          onMouseLeave={ev=>ev.currentTarget.style.color="#2a2a2a"}>✕</button>
+                      </div>
+                    );
+                  })}
+                  <div style={{padding:"10px 18px 10px 68px",fontSize:16,color:"#2a5000",cursor:"pointer",borderTop:"1px solid #111",fontWeight:600}}
+                    onMouseDown={e=>{e.stopPropagation();setModal({type:"addEx",mId:m.id});}}>+ Add exercise</div>
+                  <div style={{padding:"10px 18px 10px 68px",fontSize:16,color:"#5a1800",cursor:"pointer",borderTop:"1px solid #111",fontWeight:600}}
+                    onMouseDown={e=>{e.stopPropagation();setModal({type:"confirm",msg:`Delete "${m.name}" and all its data?`,onOk:()=>delMuscle(m.id)});}}>− Delete muscle</div>
+                </div>
+              )}
+            </div>
+          ))
+        )}
+
+        <div style={{padding:"18px 18px 12px",marginTop:"auto"}}>
+          <button style={{...btn(true),display:"block",width:"100%",marginTop:4,fontSize:16,padding:"16px"}}
+            onMouseDown={e=>{e.stopPropagation();setModal({type:"addMuscle"});}}>+ Add Muscle Group</button>
+        </div>
+        <div style={{textAlign:"center",padding:"8px 20px 36px",fontSize:12,color:"#555",letterSpacing:2,...T,marginTop:"auto"}}>
+          CREATED WITH ❤️ BY PRASAD
+        </div>
+      </div>
+    </>;
+  }
+
+  // ── WIZARD ───────────────────────────────────────────────
+  function Wizard(){
+    const {step,date,mId,eId,sid}=wizard;
+    const muscle  = mId?getMuscle(mId):null;
+    const exer    = eId?getEx(mId,eId):null;
+    const session = sid?getSess(mId,eId,sid):null;
+    const [editNote,setEN]=useState(false);
+    const [noteVal, setNV]=useState(session?.note||"");
+    const [exSearch,setExSearch]=useState("");
+    const fabVisible=wizFabVisible;
+
+    if(step==="muscle") return (
+      <div style={{minHeight:"100vh",display:"flex",flexDirection:"column"}}>
+        <div style={hdr}>
+          <button style={bkBtn} onClick={()=>setWizard(null)}>✕</button>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={ttl}>Record Session</div>
+            <div style={sub}>Pick a muscle group</div>
+          </div>
+        </div>
+        <div ref={wScrollRef} style={{flex:1,overflowY:"auto",paddingBottom:100}}>
+          {data.muscles.map(m=>(
+            <div key={m.id} style={crd}
+              onClick={()=>setWizard({step:"exercise",date,mId:m.id})}
+              onMouseEnter={e=>e.currentTarget.style.borderColor="#2a2a2a"}
+              onMouseLeave={e=>e.currentTarget.style.borderColor=C.border}>
+              <MuscleIcon muscle={m.name} size={44}/>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontWeight:600,fontSize:14}}>{m.name}</div>
+                <div style={{fontSize:11,color:C.muted,marginTop:3}}>{m.exercises.length} exercises</div>
+              </div>
+              <span style={{color:"#3a3a3a",fontSize:18}}>›</span>
+            </div>
+          ))}
+        </div>
+        <FloatBtn label="✕  Cancel" onClick={()=>setWizard(null)} visible={fabVisible}/>
+      </div>
+    );
+
+    if(step==="exercise"&&muscle) {
+      const filtered = sortEx(muscle.exercises).filter(e=>
+        e.name.toLowerCase().includes(exSearch.toLowerCase())
+      );
+      return (
+        <div style={{minHeight:"100vh",display:"flex",flexDirection:"column"}}>
+          <div style={hdr}>
+            <button style={bkBtn} onClick={()=>setWizard(w=>({...w,step:"muscle",eId:null,sid:null}))}>← Back</button>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={ttl}>{muscle.name}</div>
+              <div style={sub}>Pick an exercise</div>
+            </div>
+          </div>
+          {/* Search bar — sticky below header */}
+          <div style={{padding:"10px 14px 6px",background:C.bg,borderBottom:"1px solid #141414",position:"sticky",top:0,zIndex:10}}>
+            <div style={{position:"relative",display:"flex",alignItems:"center"}}>
+              <span style={{position:"absolute",left:13,fontSize:14,color:"#3a3a3a",pointerEvents:"none"}}>⌕</span>
+              <input
+                style={{...inp,marginBottom:0,paddingLeft:36,background:"#0f0f0f",border:"1px solid #1e1e1e"}}
+                placeholder="Search exercises…"
+                value={exSearch}
+                autoFocus
+                onChange={e=>setExSearch(e.target.value)}
+              />
+              {exSearch&&<button
+                style={{position:"absolute",right:10,background:"none",border:"none",color:"#555",cursor:"pointer",fontSize:16,padding:"4px",lineHeight:1}}
+                onMouseDown={e=>{e.preventDefault();setExSearch("");}}>✕</button>}
+            </div>
+          </div>
+          <div ref={wScrollRef} style={{flex:1,overflowY:"auto",paddingBottom:100}}>
+            {filtered.length===0&&<div style={mpt}>No exercises match<br/>"{exSearch}"</div>}
+            {filtered.map(e=>{
+              const last=sortSess(e.sessions)[0];
+              const maxW=last?.sets.filter(s=>s.weight!=null).length?Math.max(...last.sets.filter(s=>s.weight!=null).map(s=>s.weight)):0;
+              // Highlight matching text
+              const hi=(name)=>{
+                if(!exSearch.trim()) return name;
+                const idx=name.toLowerCase().indexOf(exSearch.toLowerCase());
+                if(idx<0) return name;
+                return <>{name.slice(0,idx)}<span style={{color:C.green,fontWeight:700}}>{name.slice(idx,idx+exSearch.length)}</span>{name.slice(idx+exSearch.length)}</>;
+              };
+              return(
+                <div key={e.id} style={crd}
+                  onClick={()=>{ const ns=addSession(mId,e.id,date); setWizard(w=>({...w,step:"sets",eId:e.id,sid:ns})); }}
+                  onMouseEnter={el=>el.currentTarget.style.borderColor="#2a2a2a"}
+                  onMouseLeave={el=>el.currentTarget.style.borderColor=C.border}>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontWeight:600,fontSize:14}}>{hi(e.name)}</div>
+                    <div style={{fontSize:11,color:C.muted,marginTop:3}}>{e.sessions.length} sessions{maxW>0?` · Last max: ${maxW}kg`:""}</div>
+                  </div>
+                  <span style={{color:"#3a3a3a",fontSize:18}}>›</span>
+                </div>
+              );
+            })}
+          </div>
+          <FloatBtn label="← Back" onClick={()=>setWizard(w=>({...w,step:"muscle",eId:null,sid:null}))} visible={wizFabVisible} left/>
+        </div>
+      );
+    }
+
+    if(step==="sets"&&session){
+      return (
+        <div style={{minHeight:"100vh",display:"flex",flexDirection:"column"}}>
+          <div style={hdr}>
+            <button style={bkBtn} onClick={()=>setWizard(w=>({...w,step:"exercise",sid:null}))}>← Back</button>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={ttl}>{exer?.name}</div>
+              <div style={sub}>{muscle?.name} · {fmtDate(date)}</div>
+            </div>
+          </div>
+          <StatsBar sets={session.sets}/>
+          <div ref={wScrollRef} style={{flex:1,overflowY:"auto",paddingBottom:110}}>
+            <div style={{padding:"10px 14px"}}>
+              {!editNote
+                ?<div style={nBox} onClick={()=>{setEN(true);setNV(session.note);}}>
+                  {session.note||<span style={{color:"#1c1c1c"}}>+ Add session note…</span>}
+                </div>
+                :<input style={{...inp,marginBottom:0}} autoFocus value={noteVal}
+                  onChange={e=>setNV(e.target.value)}
+                  onBlur={()=>{updateNote(mId,eId,sid,noteVal);setEN(false);}}
+                  onKeyDown={e=>{if(e.key==="Enter"){updateNote(mId,eId,sid,noteVal);setEN(false);}}}/>
+              }
+            </div>
+            <div style={sLbl}>Sets</div>
+            <SetList sets={session.sets} mId={mId} eId={eId} sid={sid}/>
+          </div>
+          {/* Log Set on left, Done on right */}
+          <FloatBtn label="+ Log Set" onClick={()=>setModal({type:"addSet",mId,eId,sid})} visible={fabVisible} left/>
+          <FloatBtn label="Done ✓" onClick={()=>setWizard(null)} visible={fabVisible} right/>
+        </div>
+      );
+    }
+    return null;
+  }
+
+  // ── CALENDAR OVERLAY ─────────────────────────────────────
+  function CalendarOverlay(){
+    const today = new Date();
+    const [yr,  setYr]  = useState(today.getFullYear());
+    const [mon, setMon] = useState(today.getMonth()); // 0-indexed
+
+    // Build set of all dates that have sessions
+    const sessionDates = new Set(getAllSessions(data.muscles).map(s=>s.date));
+
+    const monthName = new Date(yr,mon,1).toLocaleString("en-US",{month:"long",year:"numeric"});
+    const firstDay  = new Date(yr,mon,1).getDay(); // 0=Sun
+    const daysInMonth = new Date(yr,mon+1,0).getDate();
+    const todayStr  = today.toISOString().slice(0,10);
+
+    const prevMon = ()=>{ if(mon===0){setMon(11);setYr(y=>y-1);}else setMon(m=>m-1); };
+    const nextMon = ()=>{ if(mon===11){setMon(0);setYr(y=>y+1);}else setMon(m=>m+1); };
+
+    const cells = [];
+    // Empty cells before first day
+    for(let i=0;i<firstDay;i++) cells.push(null);
+    for(let d=1;d<=daysInMonth;d++) cells.push(d);
+
+    const pad = n=>String(n).padStart(2,"0");
+    const dateStr = d=>`${yr}-${pad(mon+1)}-${pad(d)}`;
+
+    return (
+      <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.92)",zIndex:100,display:"flex",flexDirection:"column",...T}}
+        onClick={()=>setCalOpen(false)}>
+        <div style={{background:"#0f0f0f",borderBottom:"1px solid #1a1a1a",padding:"44px 18px 16px",display:"flex",alignItems:"center",gap:12}}
+          onClick={e=>e.stopPropagation()}>
+          <button style={bkBtn} onClick={()=>setCalOpen(false)}>✕</button>
+          <div style={{flex:1,textAlign:"center"}}>
+            <div style={{fontSize:13,fontWeight:700,letterSpacing:2,textTransform:"uppercase",color:C.text}}>Calendar</div>
+          </div>
+          {/* placeholder to balance the back button */}
+          <div style={{width:52}}/>
+        </div>
+
+        <div style={{flex:1,overflowY:"auto",padding:"0 14px 40px"}} onClick={e=>e.stopPropagation()}>
+          {/* Month nav */}
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"18px 4px 12px"}}>
+            <button style={{...bkBtn,padding:"8px 16px"}} onClick={prevMon}>‹</button>
+            <div style={{fontSize:13,fontWeight:700,color:C.text,letterSpacing:1,textTransform:"uppercase"}}>{monthName}</div>
+            <button style={{...bkBtn,padding:"8px 16px"}} onClick={nextMon}>›</button>
+          </div>
+
+          {/* Day-of-week headers */}
+          <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",marginBottom:6}}>
+            {["S","M","T","W","T","F","S"].map((d,i)=>(
+              <div key={i} style={{textAlign:"center",fontSize:10,color:"#333",letterSpacing:1,padding:"4px 0",textTransform:"uppercase"}}>{d}</div>
+            ))}
+          </div>
+
+          {/* Day cells */}
+          <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:4}}>
+            {cells.map((d,i)=>{
+              if(!d) return <div key={i}/>;
+              const ds=dateStr(d);
+              const hasSess=sessionDates.has(ds);
+              const isToday=ds===todayStr;
+              return(
+                <div key={i}
+                  style={{
+                    aspectRatio:"1",display:"flex",flexDirection:"column",alignItems:"center",
+                    justifyContent:"center",borderRadius:8,cursor:hasSess?"pointer":"default",
+                    background: isToday?"#1a2a00": hasSess?"#111":"transparent",
+                    border: isToday?`1px solid ${C.green}`: hasSess?"1px solid #1e1e1e":"1px solid transparent",
+                    position:"relative",
+                  }}
+                  onClick={()=>{ if(hasSess){ setViewDay(ds); setCalOpen(false); setScreen("day"); } }}>
+                  <span style={{fontSize:13,fontWeight: isToday?700:hasSess?600:400, color: isToday?C.green: hasSess?"#ccc":"#2a2a2a"}}>
+                    {d}
+                  </span>
+                  {hasSess&&(
+                    <div style={{width:4,height:4,borderRadius:"50%",background:C.green,marginTop:2}}/>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Session count for current month */}
+          {(()=>{
+            const count=[...sessionDates].filter(d=>d.startsWith(`${yr}-${pad(mon+1)}`)).length;
+            return count>0?(
+              <div style={{textAlign:"center",marginTop:20,fontSize:11,color:"#333",letterSpacing:2,textTransform:"uppercase"}}>
+                {count} session{count!==1?"s":""} this month
+              </div>
+            ):null;
+          })()}
+        </div>
+      </div>
+    );
+  }
+
+  // ── HOME ─────────────────────────────────────────────────
+  function Home(){
+    const days=groupByDay(getAllSessions(data.muscles));
+    const PREVIEW=2;
+    return (
+      <div style={{minHeight:"100vh",display:"flex",flexDirection:"column"}}>
+        <div style={hdr}>
+          <button style={mnBtn} onClick={()=>setSidebar(true)}>☰</button>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={ttl}>GymLog</div>
+            <div style={{...sub,fontSize:11,letterSpacing:1,color:"#555"}}>Push harder than yesterday 💪</div>
+          </div>
+          <button style={{...mnBtn,fontSize:18}} onClick={()=>setCalOpen(true)}>📅</button>
+        </div>
+
+        <div ref={scrollRef} style={{flex:1,overflowY:"auto",paddingBottom:110}}>
+          {days.length===0&&<div style={mpt}>No sessions yet<br/>Tap Record Session to start</div>}
+          {days.map(({date,sessions})=>{
+            const totalSets=sessions.reduce((a,s)=>a+s.sets.length,0);
+            const visible=sessions.slice(0,PREVIEW);
+            const hidden=sessions.length-PREVIEW;
+            const goToDay=()=>{ setViewDay(date); setScreen("day"); };
+            return(
+              <div key={date} style={{margin:"6px 14px",background:C.card,border:`1px solid ${C.border}`,borderRadius:12,overflow:"hidden",cursor:"pointer"}}
+                onClick={goToDay}
+                onMouseEnter={e=>e.currentTarget.style.borderColor="#2a2a2a"}
+                onMouseLeave={e=>e.currentTarget.style.borderColor=C.border}>
+                {/* Day header */}
+                <div style={{padding:"11px 14px 9px",borderBottom:"1px solid #161616",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+                  <div style={{fontWeight:700,fontSize:13,color:C.text,letterSpacing:0.5}}>{fmtDate(date)}</div>
+                  <div style={{fontSize:10,color:"#3a3a3a",letterSpacing:1}}>{sessions.length} exercise{sessions.length!==1?"s":""} · {totalSets} sets</div>
+                </div>
+                {/* Exercise rows — compact preview */}
+                {visible.map((s,i)=>{
+                  const maxW=s.sets.filter(t=>t.weight!=null).length?Math.max(...s.sets.filter(t=>t.weight!=null).map(t=>t.weight)):0;
+                  return(
+                    <div key={s.id} style={{display:"flex",alignItems:"center",gap:8,padding:"8px 14px",borderTop:i>0?"1px solid #111":"none"}}>
+                      <MuscleIcon muscle={s.mName} size={26}/>
+                      <div style={{flex:1,minWidth:0}}>
+                        <div style={{fontSize:12,fontWeight:600,color:"#c0c0c0",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{s.eName}</div>
+                        <div style={{fontSize:10,color:C.muted,marginTop:1}}>
+                          {s.sets.length} sets{maxW>0?` · ${maxW}kg`:""}
+                        </div>
+                      </div>
+                      <button style={{...dBtn,fontSize:15,padding:"4px 8px"}}
+                        onClick={e=>{e.stopPropagation();setModal({type:"confirm",msg:"Delete this session?",onOk:()=>delSession(s.mId,s.eId,s.id)});}}
+                        onMouseEnter={e=>e.currentTarget.style.color="#cc2222"}
+                        onMouseLeave={e=>e.currentTarget.style.color="#252525"}>✕</button>
+                    </div>
+                  );
+                })}
+                {/* +N more indicator */}
+                {hidden>0&&(
+                  <div style={{padding:"6px 14px",borderTop:"1px solid #111",textAlign:"center"}}>
+                    <span style={{fontSize:10,color:"#3a3a3a",letterSpacing:1,textTransform:"uppercase"}}>+{hidden} more ▼</span>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        <FloatBtn label="＋  Record Session" onClick={()=>setWizard({step:"muscle",date:new Date().toISOString().slice(0,10)})} visible={fabVisible}/>
+      </div>
+    );
+  }
+
+  // ── DAY DETAIL ───────────────────────────────────────────
+  function DayDetail(){
+    const daySessions=getAllSessions(data.muscles).filter(s=>s.date===viewDay);
+    return (
+      <div style={{minHeight:"100vh",display:"flex",flexDirection:"column"}}>
+        <div style={hdr}>
+          <button style={bkBtn} onClick={()=>setScreen("home")}>← Back</button>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={ttl}>{viewDay?fmtDate(viewDay):""}</div>
+            <div style={sub}>{daySessions.length} exercises</div>
+          </div>
+        </div>
+        <div ref={scrollRef} style={{flex:1,overflowY:"auto",paddingBottom:110}}>
+          {daySessions.length===0&&<div style={mpt}>No exercises logged<br/>Tap Add Exercise below</div>}
+          {daySessions.map(s=>{
+            const maxW=s.sets.filter(t=>t.weight!=null).length?Math.max(...s.sets.filter(t=>t.weight!=null).map(t=>t.weight)):0;
+            const vol =s.sets.filter(t=>t.weight!=null).reduce((a,t)=>a+t.weight*t.reps,0);
+            return(
+              <div key={s.id} style={crd}
+                onClick={()=>{ prevScreen.current="day"; setViewSid({mId:s.mId,eId:s.eId,sid:s.id}); setScreen("exercise"); }}
+                onMouseEnter={e=>e.currentTarget.style.borderColor="#2a2a2a"}
+                onMouseLeave={e=>e.currentTarget.style.borderColor=C.border}>
+                <MuscleIcon muscle={s.mName} size={38}/>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontWeight:600,fontSize:14}}>{s.eName}</div>
+                  <div style={{fontSize:11,color:C.muted,marginTop:3}}>
+                    {s.mName} · {s.sets.length} sets{maxW>0?` · Max ${maxW}kg`:""}
+                    {vol>0?` · Vol ${vol}kg`:""}
+                  </div>
+                  {s.note&&<div style={{fontSize:11,color:"#3a5818",marginTop:3,fontStyle:"italic"}}>"{s.note}"</div>}
+                </div>
+                <button style={dBtn}
+                  onClick={e=>{e.stopPropagation();setModal({type:"confirm",msg:"Delete this session?",onOk:()=>delSession(s.mId,s.eId,s.id)});}}
+                  onMouseEnter={e=>e.currentTarget.style.color="#cc2222"}
+                  onMouseLeave={e=>e.currentTarget.style.color="#252525"}>✕</button>
+              </div>
+            );
+          })}
+
+        </div>
+        <FloatBtn label="＋  Add Exercise" onClick={()=>setWizard({step:"muscle",date:viewDay})} visible={fabVisible}/>
+      </div>
+    );
+  }
+
+  // ── EXERCISE HISTORY (from sidebar tap) ──────────────────
+  function ExerciseHistory(){
+    const {mId,eId}=viewEx||{};
+    const muscle=getMuscle(mId);
+    const exer  =getEx(mId,eId);
+    // Guard: if data not ready yet, show loading
+    if(!mId||!eId||!exer) return (
+      <div style={{minHeight:"100vh",display:"flex",flexDirection:"column"}}>
+        <div style={hdr}>
+          <button style={bkBtn} onClick={()=>setScreen("home")}>← Back</button>
+          <div style={{flex:1,minWidth:0}}><div style={ttl}>Exercise</div></div>
+        </div>
+        <div style={mpt}>Loading…</div>
+      </div>
+    );
+    const sessions=sortSess(exer.sessions).map(s=>({...s,mId,mName:muscle?.name,eName:exer.name,eId}));
+    return (
+      <div style={{minHeight:"100vh",display:"flex",flexDirection:"column"}}>
+        <div style={hdr}>
+          <button style={bkBtn} onClick={()=>setScreen("home")}>← Back</button>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={ttl}>{exer.name}</div>
+            <div style={sub}>{muscle?.name} · {exer.sessions.length} sessions</div>
+          </div>
+        </div>
+        <div ref={scrollRef} style={{flex:1,overflowY:"auto",paddingBottom:110}}>
+          {sessions.length===0&&<div style={mpt}>No sessions yet<br/>Tap Record Session to start</div>}          {sessions.map((s,i)=>{
+            const maxW=s.sets.filter(t=>t.weight!=null).length?Math.max(...s.sets.filter(t=>t.weight!=null).map(t=>t.weight)):0;
+            const vol =s.sets.filter(t=>t.weight!=null).reduce((a,t)=>a+t.weight*t.reps,0);
+            return(
+              <div key={s.id} style={crd}
+                onClick={()=>{ prevScreen.current="exHistory"; setViewSid({mId,eId,sid:s.id}); setScreen("exercise"); }}
+                onMouseEnter={e=>e.currentTarget.style.borderColor="#2a2a2a"}
+                onMouseLeave={e=>e.currentTarget.style.borderColor=C.border}>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:2}}>
+                    <div style={{fontWeight:600,fontSize:14}}>{fmtDate(s.date)}</div>
+                    {i===0&&<span style={{background:"#1a2a00",border:"1px solid #2a4400",borderRadius:20,padding:"1px 8px",fontSize:10,color:"#9cc018",letterSpacing:1}}>Latest</span>}
+                  </div>
+                  <div style={{fontSize:11,color:C.muted,marginTop:2}}>
+                    {s.sets.length} sets{maxW>0?` · Max ${maxW}kg`:""}
+                    {vol>0?` · Vol ${vol}kg`:""}
+                  </div>
+                  {s.note&&<div style={{fontSize:11,color:"#3a5818",marginTop:3,fontStyle:"italic"}}>"{s.note}"</div>}
+                </div>
+                <button style={dBtn}
+                  onClick={e=>{e.stopPropagation();setModal({type:"confirm",msg:`Delete session from ${fmtDate(s.date)}?`,onOk:()=>delSession(mId,eId,s.id)});}}
+                  onMouseEnter={e=>e.currentTarget.style.color="#cc2222"}
+                  onMouseLeave={e=>e.currentTarget.style.color="#252525"}>✕</button>
+              </div>
+            );
+          })}
+
+        </div>
+        <FloatBtn label="＋  Record Session" onClick={()=>setWizard({step:"muscle",date:new Date().toISOString().slice(0,10)})} visible={fabVisible}/>
+      </div>
+    );
+  }
+
+  // ── EXERCISE DETAIL (sets for one session) ────────────────
+  function ExerciseDetail(){
+    const {mId,eId,sid}=viewSid||{};
+    const muscle  = getMuscle(mId);
+    const exer    = getEx(mId,eId);
+    const session = getSess(mId,eId,sid);
+    const [editNote,setEN]=useState(false);
+    const [noteVal, setNV]=useState(session?.note||"");
+    if(!session) return null;
+    return (
+      <div style={{minHeight:"100vh",display:"flex",flexDirection:"column"}}>
+        <div style={hdr}>
+          <button style={bkBtn} onClick={()=>setScreen(prevScreen.current)}>← Back</button>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={ttl}>{exer?.name}</div>
+            <div style={sub}>{muscle?.name} · {fmtDate(session.date)}</div>
+          </div>
+        </div>
+        <StatsBar sets={session.sets}/>
+        <div ref={scrollRef} style={{flex:1,overflowY:"auto",paddingBottom:110}}>
+          <div style={{padding:"10px 14px"}}>
+            {!editNote
+              ?<div style={nBox} onClick={()=>{setEN(true);setNV(session.note);}}>
+                {session.note||<span style={{color:"#1c1c1c"}}>+ Add session note…</span>}
+              </div>
+              :<input style={{...inp,marginBottom:0}} autoFocus value={noteVal}
+                onChange={e=>setNV(e.target.value)}
+                onBlur={()=>{updateNote(mId,eId,sid,noteVal);setEN(false);}}
+                onKeyDown={e=>{if(e.key==="Enter"){updateNote(mId,eId,sid,noteVal);setEN(false);}}}/>
+            }
+          </div>
+          <div style={sLbl}>Sets</div>
+          <SetList sets={session.sets} mId={mId} eId={eId} sid={sid}/>
+
+        </div>
+        <FloatBtn label="+ Log Set" onClick={()=>setModal({type:"addSet",mId,eId,sid})} visible={fabVisible} left/>
+      </div>
+    );
+  }
+
+  // ── RENDER ────────────────────────────────────────────────
+  return(
+    <div style={{height:"100vh",background:C.bg,color:C.text,...T,fontSize:14,overflow:"hidden",display:"flex",flexDirection:"column"}}>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&display=swap');
+        *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent;}
+        input[type=date]::-webkit-calendar-picker-indicator{filter:invert(0.4);cursor:pointer;}
+        input[type=number]{-moz-appearance:textfield;}
+        input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none;}
+        ::-webkit-scrollbar{width:3px;}::-webkit-scrollbar-track{background:#0a0a0a;}
+        ::-webkit-scrollbar-thumb{background:#181818;border-radius:2px;}
+        input:focus{border-color:#2a4200!important;}
+        button:active{opacity:0.75;}
+      `}</style>
+
+      {sidebar&&<Sidebar/>}
+      {calOpen&&<CalendarOverlay/>}
+
+      <div style={{flex:1,overflow:"hidden",display:"flex",flexDirection:"column"}}>
+        {wizard
+          ? <Wizard/>
+          : screen==="exercise"
+            ? <ExerciseDetail/>
+            : screen==="exHistory"
+              ? <ExerciseHistory/>
+              : screen==="day"
+                ? <DayDetail/>
+                : <Home/>
+        }
+      </div>
+
+      {modal?.type==="addMuscle"&&<NameModal title="Add Muscle Group" ph="e.g. Glutes, Forearms…" onAdd={addMuscle}/>}
+      {modal?.type==="addEx"    &&<NameModal title="Add Exercise" ph="e.g. Bench Press, Squat…" onAdd={n=>addEx(modal.mId,n)} checkDupe={n=>getMuscle(modal.mId)?.exercises.some(e=>e.name.trim().toLowerCase()===n.trim().toLowerCase())}/>}
+      {modal?.type==="editEx"   &&<EditExModal mId={modal.mId} eId={modal.eId} current={modal.current}/>}
+      {modal?.type==="addSet"   &&<SetModal mId={modal.mId} eId={modal.eId} sid={modal.sid}/>}
+      {modal?.type==="confirm"  &&<ConfirmModal msg={modal.msg} onOk={modal.onOk}/>}
+    </div>
+  );
+}
+APPEOF
+
+# ── Build & APK ──────────────────────────────────────────────
+step "Step 4/4 — Building React + Android APK"
+
+log "Installing npm dependencies..."
+npm install --silent
+
+log "Installing Capacitor..."
+npm install --silent @capacitor/core @capacitor/cli @capacitor/android @capacitor/app
+
+log "Building production bundle..."
+GENERATE_SOURCEMAP=false npm run build
+success "React build complete"
+
+# Capacitor setup
+
+log "Initializing Capacitor..."
+npx cap init GymLog com.gymlog.app --web-dir=build 2>/dev/null || true
+
+log "Adding Android platform..."
+npx cap add android 2>/dev/null || true
+
+log "Syncing assets to Android..."
+npx cap sync android
+
+# Configure gradle for Java 21
+GRADLE_PROPS="$APP_DIR/android/gradle.properties"
+sed -i '/^org.gradle.java.home/d' "$GRADLE_PROPS" 2>/dev/null || true
+sed -i '/^org.gradle.jvmargs/d'   "$GRADLE_PROPS" 2>/dev/null || true
+echo "org.gradle.java.home=/usr/lib/jvm/java-21-openjdk-amd64" >> "$GRADLE_PROPS"
+echo "org.gradle.jvmargs=-Xmx2048m -XX:MaxMetaspaceSize=512m"  >> "$GRADLE_PROPS"
+success "Gradle configured for Java 21"
+
+log "Building APK — first run downloads ~300MB, please wait..."
+cd "$APP_DIR/android"
+chmod +x gradlew
+./gradlew assembleDebug --no-daemon 2>&1 | while IFS= read -r line; do
+  echo "$line" | grep -qE "^> Task|Download http|BUILD|FAILURE|error:" && echo "    $line" || true
+done
+
+APK_SRC="$APP_DIR/android/app/build/outputs/apk/debug/app-debug.apk"
+
+if [ -f "$APK_SRC" ]; then
+  cp "$APK_SRC" "$BUILD_DIR/GymLog.apk"
+  APK_SIZE=$(du -sh "$BUILD_DIR/GymLog.apk" | cut -f1)
+
+  echo ""
+  echo -e "${BOLD}${GREEN}══════════════════════════════════════════${NC}"
+  echo -e "${BOLD}${GREEN}  ✓  BUILD SUCCESSFUL — GymLog v2${NC}"
+  echo -e "${BOLD}${GREEN}══════════════════════════════════════════${NC}"
+  echo ""
+  echo -e "  APK: ${CYAN}$BUILD_DIR/GymLog.apk${NC}  (${APK_SIZE})"
+  echo ""
+  echo -e "  ${BOLD}What's new in v2:${NC}"
+  echo -e "  · Hardware back button no longer exits the app"
+  echo -e "  · Sessions always sorted newest-first by date"
+  echo -e "  · Exercises sorted by most recently used"
+  echo -e "  · Anatomical SVG muscle icons on home screen"
+  echo -e "  · 140+ exercises pre-populated across 7 muscles"
+  echo ""
+  echo -e "  ${BOLD}Install on Android:${NC}"
+  echo -e "  1. Copy GymLog.apk to your phone"
+  echo -e "  2. Settings → Security → Unknown Sources → ON"
+  echo -e "  3. Tap APK file → Install"
+  echo -e "  ${CYAN}  Or via USB: adb install $BUILD_DIR/GymLog.apk${NC}"
+  echo ""
+else
+  echo ""
+  echo -e "${RED}Build failed. Running with full output for diagnosis:${NC}"
+  ./gradlew assembleDebug --no-daemon --stacktrace 2>&1 | tail -80
+  error "See errors above."
+fi
