@@ -318,11 +318,14 @@ export default function App(){
     return s.id;
   };
   const delSession = (mId,eId,sid) => setData(d=>({...d,muscles:d.muscles.map(m=>m.id===mId?{...m,exercises:m.exercises.map(e=>e.id===eId?{...e,sessions:e.sessions.filter(s=>s.id!==sid)}:e)}:m)}));
-  const addSet     = (mId,eId,sid,weight,reps,note)=>{
-    const set={id:uid(),weight:weight||null,reps,note:note||""}; const now=Date.now();
+  const addSet     = (mId,eId,sid,setData_)=>{
+    const set={id:uid(), type:"normal", weight:null, reps:0, note:"", dropSets:[], superSets:[], ...setData_};
+    const now=Date.now();
     setData(d=>({...d,muscles:d.muscles.map(m=>m.id===mId?{...m,lastEdited:now,exercises:m.exercises.map(e=>e.id===eId?{...e,lastEdited:now,sessions:e.sessions.map(s=>s.id===sid?{...s,sets:[...s.sets,set]}:s)}:e)}:m)}));
   };
   const delSet     = (mId,eId,sid,setId) => setData(d=>({...d,muscles:d.muscles.map(m=>m.id===mId?{...m,exercises:m.exercises.map(e=>e.id===eId?{...e,sessions:e.sessions.map(s=>s.id===sid?{...s,sets:s.sets.filter(t=>t.id!==setId)}:s)}:e)}:m)}));
+  const updateSet  = (mId,eId,sid,setId,patch) => setData(d=>({...d,muscles:d.muscles.map(m=>m.id===mId?{...m,exercises:m.exercises.map(e=>e.id===eId?{...e,sessions:e.sessions.map(s=>s.id===sid?{...s,sets:s.sets.map(t=>t.id===setId?{...t,...patch}:t)}:s)}:e)}:m)}));
+  const reorderSets= (mId,eId,sid,newSets) => setData(d=>({...d,muscles:d.muscles.map(m=>m.id===mId?{...m,exercises:m.exercises.map(e=>e.id===eId?{...e,sessions:e.sessions.map(s=>s.id===sid?{...s,sets:newSets}:s)}:e)}:m)}));
   const updateNote = (mId,eId,sid,note) => setData(d=>({...d,muscles:d.muscles.map(m=>m.id===mId?{...m,exercises:m.exercises.map(e=>e.id===eId?{...e,sessions:e.sessions.map(s=>s.id===sid?{...s,note}:s)}:e)}:m)}));
 
   // ── Design tokens ────────────────────────────────────────
@@ -411,25 +414,200 @@ export default function App(){
 
   // Weight is now optional
   function SetModal({mId,eId,sid}){
+    const [type,setType]=useState("normal"); // "normal"|"drop"|"super"
     const [w,sw]=useState("");
     const [r,sr]=useState("");
     const [n,sn]=useState("");
+    // Drop set rows
+    const [drops,setDrops]=useState([{id:uid(),w:"",r:""}]);
+    // Super set: selected exercises + their w/r
+    const allEx=data.muscles.flatMap(m=>m.exercises.map(e=>({...e,mId:m.id,mName:m.name})));
+    const [superEx,setSuperEx]=useState([]); // [{eId,mId,mName,name,w,r}]
+    const [exSearch,setExSearch]=useState("");
+
+    const canLog = type==="normal"?!!r
+      : type==="drop"?!!r
+      : superEx.length>0&&superEx.every(e=>e.r);
+
     const doLog=()=>{
-      if(!r){ return; } // reps required, weight optional
-      addSet(mId,eId,sid,w?parseFloat(w):null,parseInt(r),n);
+      if(!canLog) return;
+      if(type==="normal"){
+        addSet(mId,eId,sid,{weight:w?parseFloat(w):null,reps:parseInt(r),note:n,type:"normal",dropSets:[],superSets:[]});
+      } else if(type==="drop"){
+        addSet(mId,eId,sid,{weight:w?parseFloat(w):null,reps:parseInt(r),note:n,type:"drop",
+          dropSets:drops.filter(d=>d.r).map(d=>({id:d.id,weight:d.w?parseFloat(d.w):null,reps:parseInt(d.r)})),
+          superSets:[]});
+      } else {
+        addSet(mId,eId,sid,{weight:null,reps:0,note:n,type:"super",dropSets:[],
+          superSets:superEx.map(e=>({eId:e.eId,mId:e.mId,name:e.name,weight:e.w?parseFloat(e.w):null,reps:parseInt(e.r)}))});
+      }
+      setModal(null);
+    };
+
+    const tabStyle=(t)=>({
+      flex:1,padding:"10px 4px",border:"none",borderRadius:6,cursor:"pointer",fontSize:11,fontWeight:700,
+      letterSpacing:1,textTransform:"uppercase",...T,
+      background:type===t?C.green:"#181818",color:type===t?"#000":"#555",
+    });
+
+    const filteredEx=allEx.filter(e=>
+      e.name.toLowerCase().includes(exSearch.toLowerCase()) &&
+      !superEx.find(s=>s.eId===e.id)
+    );
+
+    return <Wrap>
+      <div style={mTtl}>Log Set</div>
+
+      {/* Type tabs */}
+      <div style={{display:"flex",gap:6,marginBottom:14}}>
+        <button style={tabStyle("normal")} onMouseDown={e=>{e.stopPropagation();setType("normal");}}>Normal</button>
+        <button style={tabStyle("drop")}   onMouseDown={e=>{e.stopPropagation();setType("drop");}}>Drop Set</button>
+        <button style={tabStyle("super")}  onMouseDown={e=>{e.stopPropagation();setType("super");}}>Super Set</button>
+      </div>
+
+      {/* NORMAL */}
+      {type==="normal"&&<>
+        <div style={rw}>
+          <input style={{...inp,flex:1}} type="number" placeholder="Weight kg (opt)" value={w} autoFocus onChange={e=>sw(e.target.value)}/>
+          <input style={{...inp,flex:1}} type="number" placeholder="Reps *" value={r} onChange={e=>sr(e.target.value)}/>
+        </div>
+        <input style={inp} placeholder="Note (optional)" value={n} onChange={e=>sn(e.target.value)}/>
+      </>}
+
+      {/* DROP SET */}
+      {type==="drop"&&<>
+        <div style={{fontSize:10,color:"#555",letterSpacing:2,textTransform:"uppercase",marginBottom:8}}>Main Set</div>
+        <div style={rw}>
+          <input style={{...inp,flex:1}} type="number" placeholder="Weight kg (opt)" value={w} autoFocus onChange={e=>sw(e.target.value)}/>
+          <input style={{...inp,flex:1}} type="number" placeholder="Reps *" value={r} onChange={e=>sr(e.target.value)}/>
+        </div>
+        <div style={{fontSize:10,color:"#555",letterSpacing:2,textTransform:"uppercase",marginBottom:8}}>Drop Sets</div>
+        {drops.map((d,i)=>(
+          <div key={d.id} style={{...rw,alignItems:"center",marginBottom:2}}>
+            <span style={{fontSize:10,color:C.dim,width:20,flexShrink:0}}>D{i+1}</span>
+            <input style={{...inp,flex:1,marginBottom:0}} type="number" placeholder="Weight (opt)" value={d.w}
+              onChange={e=>setDrops(ds=>ds.map((x,j)=>j===i?{...x,w:e.target.value}:x))}/>
+            <input style={{...inp,flex:1,marginBottom:0,marginLeft:6}} type="number" placeholder="Reps *" value={d.r}
+              onChange={e=>setDrops(ds=>ds.map((x,j)=>j===i?{...x,r:e.target.value}:x))}/>
+            {drops.length>1&&<button style={{...dBtn,color:"#444"}}
+              onMouseDown={e=>{e.stopPropagation();setDrops(ds=>ds.filter((_,j)=>j!==i));}}>✕</button>}
+          </div>
+        ))}
+        <button style={{...btn(false),marginTop:6,marginBottom:10,fontSize:11}}
+          onMouseDown={e=>{e.stopPropagation();setDrops(ds=>([...ds,{id:uid(),w:"",r:""}]));}}>+ Add Drop</button>
+        <input style={inp} placeholder="Note (optional)" value={n} onChange={e=>sn(e.target.value)}/>
+      </>}
+
+      {/* SUPER SET */}
+      {type==="super"&&<>
+        <div style={{fontSize:10,color:"#555",letterSpacing:2,textTransform:"uppercase",marginBottom:8}}>Selected Exercises</div>
+        {superEx.length===0&&<div style={{fontSize:12,color:"#333",marginBottom:10,textAlign:"center",padding:"10px"}}>Search and add exercises below</div>}
+        {superEx.map((e,i)=>(
+          <div key={e.eId} style={{background:"#0d0d0d",border:"1px solid #1e1e1e",borderRadius:8,padding:"10px 12px",marginBottom:6}}>
+            <div style={{display:"flex",alignItems:"center",marginBottom:6}}>
+              <span style={{flex:1,fontSize:12,color:"#ccc",fontWeight:600}}>{e.name}</span>
+              <button style={{...dBtn,fontSize:14,color:"#333",padding:"2px 6px"}}
+                onMouseDown={ev=>{ev.stopPropagation();setSuperEx(s=>s.filter((_,j)=>j!==i));}}>✕</button>
+            </div>
+            <div style={rw}>
+              <input style={{...inp,flex:1,marginBottom:0,padding:"9px"}} type="number" placeholder="Weight (opt)" value={e.w||""}
+                onChange={ev=>setSuperEx(s=>s.map((x,j)=>j===i?{...x,w:ev.target.value}:x))}/>
+              <input style={{...inp,flex:1,marginBottom:0,padding:"9px",marginLeft:6}} type="number" placeholder="Reps *" value={e.r||""}
+                onChange={ev=>setSuperEx(s=>s.map((x,j)=>j===i?{...x,r:ev.target.value}:x))}/>
+            </div>
+          </div>
+        ))}
+        <div style={{position:"relative",marginBottom:4}}>
+          <span style={{position:"absolute",left:13,top:"50%",transform:"translateY(-50%)",fontSize:13,color:"#3a3a3a",pointerEvents:"none"}}>⌕</span>
+          <input style={{...inp,marginBottom:4,paddingLeft:36}} placeholder="Search exercises to add…"
+            value={exSearch} onChange={e=>setExSearch(e.target.value)}/>
+        </div>
+        {exSearch&&<div style={{maxHeight:160,overflowY:"auto",border:"1px solid #1e1e1e",borderRadius:8,marginBottom:10}}>
+          {filteredEx.slice(0,8).map(e=>(
+            <div key={e.id} style={{padding:"10px 14px",borderBottom:"1px solid #111",cursor:"pointer",fontSize:13,color:"#888"}}
+              onMouseDown={ev=>{ev.stopPropagation();setSuperEx(s=>[...s,{eId:e.id,mId:e.mId,name:e.name,mName:e.mName,w:"",r:""}]);setExSearch("");}}>
+              {e.name} <span style={{fontSize:10,color:"#333"}}>· {e.mName}</span>
+            </div>
+          ))}
+          {filteredEx.length===0&&<div style={{padding:"10px 14px",fontSize:12,color:"#333"}}>No matches</div>}
+        </div>}
+        <input style={inp} placeholder="Note (optional)" value={n} onChange={e=>sn(e.target.value)}/>
+      </>}
+
+      <div style={rw}>
+        <button style={btn()} onMouseDown={e=>{e.stopPropagation();setModal(null);}}>Cancel</button>
+        <button style={btn(true,!canLog)} onMouseDown={e=>{e.stopPropagation();doLog();}}>Log Set</button>
+      </div>
+    </Wrap>;
+  }
+
+  // Edit existing set
+  function EditSetModal({mId,eId,sid,set}){
+    const [w,sw]=useState(set.weight!=null?String(set.weight):"");
+    const [r,sr]=useState(set.reps?String(set.reps):"");
+    const [n,sn]=useState(set.note||"");
+    const [drops,setDrops]=useState(
+      set.dropSets?.length?set.dropSets.map(d=>({...d,w:d.weight!=null?String(d.weight):"",r:String(d.reps)}))
+      :[{id:uid(),w:"",r:""}]
+    );
+    const type=set.type||"normal";
+    const [superRows,setSuperRows]=useState(
+      set.superSets?.length?set.superSets.map(ss=>({...ss,w:ss.weight!=null?String(ss.weight):"",r:ss.reps?String(ss.reps):""})):[]
+    );
+    const canSave=type==="normal"?!!r : type==="drop"?!!r : superRows.every(e=>e.r);
+    const doSave=()=>{
+      if(!canSave) return;
+      const patch={note:n};
+      if(type==="normal"||type==="drop"){
+        patch.weight=w?parseFloat(w):null;
+        patch.reps=parseInt(r)||0;
+      }
+      if(type==="drop") patch.dropSets=drops.filter(d=>d.r).map(d=>({id:d.id,weight:d.w?parseFloat(d.w):null,reps:parseInt(d.r)}));
+      if(type==="super") patch.superSets=superRows.map(e=>({eId:e.eId,mId:e.mId,name:e.name,weight:e.w?parseFloat(e.w):null,reps:parseInt(e.r)||0}));
+      updateSet(mId,eId,sid,set.id,patch);
       setModal(null);
     };
     return <Wrap>
-      <div style={mTtl}>Log Set</div>
-      <div style={rw}>
-        <input style={{...inp,flex:1}} type="number" placeholder="Weight kg (opt)" value={w} autoFocus onChange={e=>sw(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")doLog();}}/>
-        <input style={{...inp,flex:1}} type="number" placeholder="Reps *" value={r} onChange={e=>sr(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")doLog();}}/>
-      </div>
-      <input style={inp} placeholder="Note (optional)" value={n} onChange={e=>sn(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")doLog();}}/>
-      {!r&&w&&<div style={{fontSize:11,color:"#883300",marginBottom:8}}>Reps are required</div>}
+      <div style={mTtl}>Edit Set {type!=="normal"&&<span style={{color:C.green,fontSize:10}}>({type})</span>}</div>
+      {(type==="normal"||type==="drop")&&<>
+        <div style={rw}>
+          <input style={{...inp,flex:1}} type="number" placeholder="Weight kg (opt)" value={w} autoFocus onChange={e=>sw(e.target.value)}/>
+          <input style={{...inp,flex:1}} type="number" placeholder="Reps *" value={r} onChange={e=>sr(e.target.value)}/>
+        </div>
+      </>}
+      {type==="drop"&&<>
+        <div style={{fontSize:10,color:"#555",letterSpacing:2,textTransform:"uppercase",marginBottom:8}}>Drop Sets</div>
+        {drops.map((d,i)=>(
+          <div key={d.id} style={{...rw,alignItems:"center",marginBottom:2}}>
+            <span style={{fontSize:10,color:C.dim,width:20,flexShrink:0}}>D{i+1}</span>
+            <input style={{...inp,flex:1,marginBottom:0}} type="number" placeholder="Weight (opt)" value={d.w}
+              onChange={e=>setDrops(ds=>ds.map((x,j)=>j===i?{...x,w:e.target.value}:x))}/>
+            <input style={{...inp,flex:1,marginBottom:0,marginLeft:6}} type="number" placeholder="Reps *" value={d.r}
+              onChange={e=>setDrops(ds=>ds.map((x,j)=>j===i?{...x,r:e.target.value}:x))}/>
+            {drops.length>1&&<button style={{...dBtn,color:"#444"}} onMouseDown={e=>{e.stopPropagation();setDrops(ds=>ds.filter((_,j)=>j!==i));}}>✕</button>}
+          </div>
+        ))}
+        <button style={{...btn(false),marginTop:6,marginBottom:10,fontSize:11}}
+          onMouseDown={e=>{e.stopPropagation();setDrops(ds=>([...ds,{id:uid(),w:"",r:""}]));}}>+ Add Drop</button>
+      </>}
+      {type==="super"&&<>
+        <div style={{fontSize:10,color:"#555",letterSpacing:2,textTransform:"uppercase",marginBottom:10}}>Super Set Exercises</div>
+        {superRows.map((e,i)=>(
+          <div key={e.eId||i} style={{background:"#0d0d0d",border:"1px solid #1e1e1e",borderRadius:8,padding:"10px 12px",marginBottom:8}}>
+            <div style={{fontSize:12,color:"#aaa",fontWeight:600,marginBottom:8}}>{e.name}</div>
+            <div style={rw}>
+              <input style={{...inp,flex:1,marginBottom:0,padding:"9px"}} type="number" placeholder="Weight (opt)" value={e.w}
+                onChange={ev=>setSuperRows(s=>s.map((x,j)=>j===i?{...x,w:ev.target.value}:x))}/>
+              <input style={{...inp,flex:1,marginBottom:0,padding:"9px",marginLeft:6}} type="number" placeholder="Reps *" value={e.r}
+                onChange={ev=>setSuperRows(s=>s.map((x,j)=>j===i?{...x,r:ev.target.value}:x))}/>
+            </div>
+          </div>
+        ))}
+      </>}
+      <input style={{...inp,marginTop:type==="super"?8:0}} placeholder="Note (optional)" value={n} onChange={e=>sn(e.target.value)}/>
       <div style={rw}>
         <button style={btn()} onMouseDown={e=>{e.stopPropagation();setModal(null);}}>Cancel</button>
-        <button style={btn(true)} onMouseDown={e=>{e.stopPropagation();doLog();}}>Log Set</button>
+        <button style={btn(true,!canSave)} onMouseDown={e=>{e.stopPropagation();doSave();}}>Save</button>
       </div>
     </Wrap>;
   }
@@ -445,33 +623,150 @@ export default function App(){
     </Wrap>;
   }
 
-  // ── Set list ─────────────────────────────────────────────
+  // ── Set list with long-press drag-to-reorder ─────────────
   function SetList({sets,mId,eId,sid}){
-    if(!sets.length) return <div style={mpt}>Tap + Log Set to add your first set</div>;
-    return sets.map((s,i)=>(
-      <div key={s.id} style={sRow}>
-        <span style={{fontSize:10,color:C.dim,letterSpacing:2,width:26,flexShrink:0}}>S{i+1}</span>
-        <div style={{flex:1}}>
-          <div style={{display:"flex",alignItems:"baseline",gap:4}}>
-            {s.weight!=null&&<><span style={{fontWeight:700,fontSize:18,color:C.green}}>{s.weight}</span><span style={{fontSize:10,color:C.dim}}>kg ×</span></>}
-            <span style={{fontWeight:700,fontSize:18,color:C.green}}>{s.reps}</span>
-            <span style={{fontSize:10,color:C.dim}}>reps</span>
-          </div>
-          {s.note&&<div style={{fontSize:11,color:"#385016",marginTop:2,fontStyle:"italic"}}>"{s.note}"</div>}
-        </div>
-        {s.weight!=null&&<span style={{fontSize:11,color:"#243810",marginRight:4,flexShrink:0}}>{Math.round(s.weight*s.reps)}kg</span>}
-        <button style={dBtn}
-          onClick={()=>setModal({type:"confirm",msg:`Delete set ${i+1}?`,onOk:()=>delSet(mId,eId,sid,s.id)})}
-          onMouseEnter={e=>e.currentTarget.style.color="#cc2222"}
-          onMouseLeave={e=>e.currentTarget.style.color="#252525"}>✕</button>
+    const [localSets,setLocalSets]=useState(sets);
+    const [dragging,setDragging]=useState(null);
+    const [dragOver,setDragOver]=useState(null);
+    const longPressTimer=useRef(null);
+    const rowRefs=useRef([]);
+    const dragState=useRef({active:false,idx:null});
+
+    useEffect(()=>setLocalSets(sets),[sets]);
+
+    if(!localSets.length) return <div style={mpt}>Tap + Log Set to add your first set</div>;
+
+    const startLongPress=(i,e)=>{
+      e.stopPropagation();
+      longPressTimer.current=setTimeout(()=>{
+        dragState.current={active:true,idx:i};
+        setDragging(i);
+        // vibrate feedback if available
+        if(navigator.vibrate) navigator.vibrate(40);
+      },350);
+    };
+    const cancelLongPress=()=>{
+      clearTimeout(longPressTimer.current);
+    };
+
+    const onTouchMove=(e)=>{
+      if(!dragState.current.active) return;
+      e.preventDefault();
+      const y=e.touches[0].clientY;
+      let over=null;
+      rowRefs.current.forEach((ref,i)=>{
+        if(!ref) return;
+        const rect=ref.getBoundingClientRect();
+        if(y>=rect.top&&y<=rect.bottom) over=i;
+      });
+      if(over!==null&&over!==dragState.current.idx) setDragOver(over);
+    };
+
+    const onTouchEnd=()=>{
+      clearTimeout(longPressTimer.current);
+      if(dragState.current.active){
+        const from=dragState.current.idx;
+        const to=dragOver;
+        if(from!==null&&to!==null&&from!==to){
+          const arr=[...localSets];
+          const [moved]=arr.splice(from,1);
+          arr.splice(to,0,moved);
+          setLocalSets(arr);
+          reorderSets(mId,eId,sid,arr);
+        }
+      }
+      dragState.current={active:false,idx:null};
+      setDragging(null);
+      setDragOver(null);
+    };
+
+    return(
+      <div onTouchMove={onTouchMove} onTouchEnd={onTouchEnd}>
+        {localSets.map((s,i)=>{
+          const type=s.type||"normal";
+          const isDragging=dragging===i;
+          const isOver=dragOver===i;
+          const typeTag=type!=="normal"
+            ?<span style={{fontSize:9,background:type==="drop"?"#2a1500":"#001a2a",color:type==="drop"?"#ff8800":"#00aaff",borderRadius:4,padding:"1px 6px",letterSpacing:1,textTransform:"uppercase",marginLeft:6}}>{type}</span>
+            :null;
+          return(
+            <div key={s.id} ref={el=>rowRefs.current[i]=el}
+              style={{...sRow,flexDirection:"column",alignItems:"stretch",
+                opacity:isDragging?0.35:1,
+                borderColor:isOver?C.green:"#171717",
+                transform:isOver?"translateY(-2px)":"translateY(0)",
+                transition:"opacity 0.15s,border-color 0.1s,transform 0.1s",
+              }}>
+              <div style={{display:"flex",alignItems:"center",gap:8}}>
+                {/* Long-press drag handle */}
+                <span
+                  style={{fontSize:16,color:isDragging?"#c8f72c":"#383838",padding:"6px 8px",flexShrink:0,cursor:"grab",userSelect:"none"}}
+                  onTouchStart={e=>startLongPress(i,e)}
+                  onTouchEnd={cancelLongPress}
+                  onMouseDown={e=>e.stopPropagation()}>⠿</span>
+                <span style={{fontSize:10,color:C.dim,letterSpacing:2,width:22,flexShrink:0}}>S{i+1}</span>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{display:"flex",alignItems:"baseline",gap:4,flexWrap:"wrap"}}>
+                    {type==="super"
+                      ?<span style={{fontSize:12,color:"#ccc",fontWeight:600}}>Super Set · {s.superSets?.length||0} exercises</span>
+                      :<>
+                        {s.weight!=null&&<><span style={{fontWeight:700,fontSize:17,color:C.green}}>{s.weight}</span><span style={{fontSize:10,color:C.dim}}>kg ×</span></>}
+                        <span style={{fontWeight:700,fontSize:17,color:C.green}}>{s.reps}</span>
+                        <span style={{fontSize:10,color:C.dim}}>reps</span>
+                      </>
+                    }
+                    {typeTag}
+                  </div>
+                  {s.note&&<div style={{fontSize:11,color:"#385016",marginTop:2,fontStyle:"italic"}}>"{s.note}"</div>}
+                </div>
+                {type!=="super"&&s.weight!=null&&<span style={{fontSize:11,color:"#243810",flexShrink:0}}>{Math.round(s.weight*s.reps)}kg</span>}
+                <button style={{...dBtn,fontSize:14,color:"#2a2a2a",padding:"4px 8px"}}
+                  onMouseDown={e=>e.stopPropagation()}
+                  onClick={()=>setModal({type:"editSet",mId,eId,sid,set:s})}
+                  onMouseEnter={e=>e.currentTarget.style.color="#c8f72c"}
+                  onMouseLeave={e=>e.currentTarget.style.color="#2a2a2a"}>✎</button>
+                <button style={{...dBtn,fontSize:16,padding:"4px 6px"}}
+                  onMouseDown={e=>e.stopPropagation()}
+                  onClick={()=>setModal({type:"confirm",msg:`Delete set ${i+1}?`,onOk:()=>delSet(mId,eId,sid,s.id)})}
+                  onMouseEnter={e=>e.currentTarget.style.color="#cc2222"}
+                  onMouseLeave={e=>e.currentTarget.style.color="#252525"}>✕</button>
+              </div>
+              {type==="drop"&&s.dropSets?.length>0&&(
+                <div style={{marginTop:8,paddingLeft:34}}>
+                  {s.dropSets.map((d,di)=>(
+                    <div key={d.id||di} style={{display:"flex",alignItems:"baseline",gap:4,marginTop:4}}>
+                      <span style={{fontSize:9,color:"#333",width:18,flexShrink:0}}>D{di+1}</span>
+                      {d.weight!=null&&<><span style={{fontSize:14,fontWeight:600,color:"#ff8800"}}>{d.weight}</span><span style={{fontSize:10,color:C.dim}}>kg ×</span></>}
+                      <span style={{fontSize:14,fontWeight:600,color:"#ff8800"}}>{d.reps}</span>
+                      <span style={{fontSize:10,color:C.dim}}>reps</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {type==="super"&&s.superSets?.length>0&&(
+                <div style={{marginTop:8,paddingLeft:34}}>
+                  {s.superSets.map((ss,si)=>(
+                    <div key={si} style={{display:"flex",alignItems:"baseline",gap:4,marginTop:4,flexWrap:"wrap"}}>
+                      <span style={{fontSize:10,color:"#555",marginRight:4}}>{ss.name}</span>
+                      {ss.weight!=null&&<><span style={{fontSize:14,fontWeight:600,color:"#00aaff"}}>{ss.weight}</span><span style={{fontSize:10,color:C.dim}}>kg ×</span></>}
+                      <span style={{fontSize:14,fontWeight:600,color:"#00aaff"}}>{ss.reps}</span>
+                      <span style={{fontSize:10,color:C.dim}}>reps</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
-    ));
+    );
   }
 
   // ── Stats bar ────────────────────────────────────────────
   function StatsBar({sets}){
-    const vol=sets.filter(s=>s.weight!=null).reduce((a,s)=>a+s.weight*s.reps,0);
-    const max=sets.filter(s=>s.weight!=null).length?Math.max(...sets.filter(s=>s.weight!=null).map(s=>s.weight)):null;
+    const normalSets=sets.filter(s=>s.weight!=null&&s.type!=="super");
+    const vol=normalSets.reduce((a,s)=>a+s.weight*s.reps,0);
+    const max=normalSets.length?Math.max(...normalSets.map(s=>s.weight)):null;
     return(
       <div style={{display:"flex",borderBottom:"1px solid #131313",background:"#0d0d0d"}}>
         {[{l:"Sets",v:sets.length},{l:"Volume",v:vol?`${vol}kg`:"—"},{l:"Max",v:max!=null?`${max}kg`:"—"}].map((x,i)=>(
@@ -621,7 +916,10 @@ export default function App(){
             onMouseDown={e=>{e.stopPropagation();setModal({type:"addMuscle"});}}>+ Add Muscle Group</button>
         </div>
         <div style={{textAlign:"center",padding:"8px 20px 36px",fontSize:12,color:"#555",letterSpacing:2,...T,marginTop:"auto"}}>
-          CREATED WITH ❤️ BY PRASAD
+          CREATED WITH ❤️ BY{" "}
+          <a href="https://www.linkedin.com/in/prasadrpatil" target="_blank" rel="noreferrer"
+            style={{color:C.green,textDecoration:"none",letterSpacing:2}}
+            onMouseDown={e=>e.stopPropagation()}>PRASAD</a>
         </div>
       </div>
     </>;
@@ -901,7 +1199,7 @@ export default function App(){
                         </div>
                       </div>
                       <button style={{...dBtn,fontSize:15,padding:"4px 8px"}}
-                        onClick={e=>{e.stopPropagation();setModal({type:"confirm",msg:"Delete this session?",onOk:()=>delSession(s.mId,s.eId,s.id)});}}
+                        onClick={e=>{e.stopPropagation();setModal({type:"confirm",msg:"Delete this exercise?",onOk:()=>delSession(s.mId,s.eId,s.id)});}}
                         onMouseEnter={e=>e.currentTarget.style.color="#cc2222"}
                         onMouseLeave={e=>e.currentTarget.style.color="#252525"}>✕</button>
                     </div>
@@ -955,7 +1253,7 @@ export default function App(){
                   {s.note&&<div style={{fontSize:11,color:"#3a5818",marginTop:3,fontStyle:"italic"}}>"{s.note}"</div>}
                 </div>
                 <button style={dBtn}
-                  onClick={e=>{e.stopPropagation();setModal({type:"confirm",msg:"Delete this session?",onOk:()=>delSession(s.mId,s.eId,s.id)});}}
+                  onClick={e=>{e.stopPropagation();setModal({type:"confirm",msg:"Delete this exercise?",onOk:()=>delSession(s.mId,s.eId,s.id)});}}
                   onMouseEnter={e=>e.currentTarget.style.color="#cc2222"}
                   onMouseLeave={e=>e.currentTarget.style.color="#252525"}>✕</button>
               </div>
@@ -1102,6 +1400,7 @@ export default function App(){
       {modal?.type==="addEx"    &&<NameModal title="Add Exercise" ph="e.g. Bench Press, Squat…" onAdd={n=>addEx(modal.mId,n)} checkDupe={n=>getMuscle(modal.mId)?.exercises.some(e=>e.name.trim().toLowerCase()===n.trim().toLowerCase())}/>}
       {modal?.type==="editEx"   &&<EditExModal mId={modal.mId} eId={modal.eId} current={modal.current}/>}
       {modal?.type==="addSet"   &&<SetModal mId={modal.mId} eId={modal.eId} sid={modal.sid}/>}
+      {modal?.type==="editSet"  &&<EditSetModal mId={modal.mId} eId={modal.eId} sid={modal.sid} set={modal.set}/>}
       {modal?.type==="confirm"  &&<ConfirmModal msg={modal.msg} onOk={modal.onOk}/>}
     </div>
   );
