@@ -94,7 +94,12 @@ function getAllSessions(muscles){
   muscles.forEach(m=>m.exercises.forEach(e=>e.sessions.forEach(s=>
     out.push({...s,mId:m.id,mName:m.name,eName:e.name,eId:e.id})
   )));
-  return out.sort((a,b)=>new Date(b.date)-new Date(a.date));
+  return out.sort((a,b)=>{
+    const dateDiff=new Date(b.date)-new Date(a.date);
+    if(dateDiff!==0) return dateDiff;
+    // same date — sort by dayOrder if set
+    return (a.dayOrder??999)-(b.dayOrder??999);
+  });
 }
 function groupByDay(sessions){
   const map={};
@@ -225,6 +230,21 @@ export default function App(){
   const delSet     = (mId,eId,sid,setId) => setData(d=>({...d,muscles:d.muscles.map(m=>m.id===mId?{...m,exercises:m.exercises.map(e=>e.id===eId?{...e,sessions:e.sessions.map(s=>s.id===sid?{...s,sets:s.sets.filter(t=>t.id!==setId)}:s)}:e)}:m)}));
   const updateSet  = (mId,eId,sid,setId,patch) => setData(d=>({...d,muscles:d.muscles.map(m=>m.id===mId?{...m,exercises:m.exercises.map(e=>e.id===eId?{...e,sessions:e.sessions.map(s=>s.id===sid?{...s,sets:s.sets.map(t=>t.id===setId?{...t,...patch}:t)}:s)}:e)}:m)}));
   const reorderSets= (mId,eId,sid,newSets) => setData(d=>({...d,muscles:d.muscles.map(m=>m.id===mId?{...m,exercises:m.exercises.map(e=>e.id===eId?{...e,sessions:e.sessions.map(s=>s.id===sid?{...s,sets:newSets}:s)}:e)}:m)}));
+  // Reorder exercises shown on a day — stores a sortOrder index on each session
+  const reorderDaySessions = (orderedSessions) => {
+    setData(d=>{
+      const muscles=[...d.muscles.map(m=>({...m,exercises:m.exercises.map(e=>({...e,sessions:[...e.sessions]}))}))];
+      orderedSessions.forEach((s,i)=>{
+        const m=muscles.find(m=>m.id===s.mId);
+        if(!m) return;
+        const ex=m.exercises.find(e=>e.id===s.eId);
+        if(!ex) return;
+        const si=ex.sessions.findIndex(ss=>ss.id===s.id);
+        if(si!==-1) ex.sessions[si]={...ex.sessions[si],dayOrder:i};
+      });
+      return {...d,muscles};
+    });
+  };
   const updateNote = (mId,eId,sid,note) => setData(d=>({...d,muscles:d.muscles.map(m=>m.id===mId?{...m,exercises:m.exercises.map(e=>e.id===eId?{...e,sessions:e.sessions.map(s=>s.id===sid?{...s,note}:s)}:e)}:m)}));
 
   // ── Design tokens ────────────────────────────────────────
@@ -440,6 +460,34 @@ export default function App(){
     </Wrap>;
   }
 
+  // Shared exercise search widget for super set add
+  function SuperExSearch({superRows,setSuperRows}){
+    const [q,setQ]=useState("");
+    const allEx=data.muscles.flatMap(m=>m.exercises.map(e=>({...e,mId:m.id,mName:m.name})));
+    const filtered=allEx.filter(e=>
+      e.name.toLowerCase().includes(q.toLowerCase())&&
+      !superRows.find(s=>s.eId===e.id)
+    );
+    return(
+      <div style={{marginBottom:6}}>
+        <div style={{position:"relative"}}>
+          <span style={{position:"absolute",left:13,top:"50%",transform:"translateY(-50%)",fontSize:13,color:"#3a3a3a",pointerEvents:"none"}}>⌕</span>
+          <input style={{...inp,paddingLeft:36,marginBottom:4}} placeholder="Add exercise to super set…"
+            value={q} onChange={e=>setQ(e.target.value)}/>
+        </div>
+        {q&&<div style={{maxHeight:150,overflowY:"auto",border:"1px solid #1e1e1e",borderRadius:8,marginBottom:8}}>
+          {filtered.slice(0,8).map(e=>(
+            <div key={e.id} style={{padding:"10px 14px",borderBottom:"1px solid #111",cursor:"pointer",fontSize:13,color:"#888"}}
+              onMouseDown={ev=>{ev.stopPropagation();setSuperRows(s=>[...s,{eId:e.id,mId:e.mId,name:e.name,mName:e.mName,w:"",r:""}]);setQ("");}}>
+              {e.name}<span style={{fontSize:10,color:"#333"}}> · {e.mName}</span>
+            </div>
+          ))}
+          {filtered.length===0&&<div style={{padding:"10px 14px",fontSize:12,color:"#333"}}>No matches</div>}
+        </div>}
+      </div>
+    );
+  }
+
   // Edit existing set
   function EditSetModal({mId,eId,sid,set}){
     const [w,sw]=useState(set.weight!=null?String(set.weight):"");
@@ -493,7 +541,11 @@ export default function App(){
         <div style={{fontSize:10,color:"#555",letterSpacing:2,textTransform:"uppercase",marginBottom:10}}>Super Set Exercises</div>
         {superRows.map((e,i)=>(
           <div key={e.eId||i} style={{background:"#0d0d0d",border:"1px solid #1e1e1e",borderRadius:8,padding:"10px 12px",marginBottom:8}}>
-            <div style={{fontSize:12,color:"#aaa",fontWeight:600,marginBottom:8}}>{e.name}</div>
+            <div style={{display:"flex",alignItems:"center",marginBottom:8}}>
+              <span style={{flex:1,fontSize:12,color:"#aaa",fontWeight:600}}>{e.name}</span>
+              <button style={{...dBtn,fontSize:14,color:"#333",padding:"2px 6px"}}
+                onMouseDown={ev=>{ev.stopPropagation();setSuperRows(s=>s.filter((_,j)=>j!==i));}}>✕</button>
+            </div>
             <div style={rw}>
               <input style={{...inp,flex:1,marginBottom:0,padding:"9px"}} type="number" placeholder="Weight (opt)" value={e.w}
                 onChange={ev=>setSuperRows(s=>s.map((x,j)=>j===i?{...x,w:ev.target.value}:x))}/>
@@ -502,6 +554,8 @@ export default function App(){
             </div>
           </div>
         ))}
+        {/* Add exercise to super set */}
+        <SuperExSearch superRows={superRows} setSuperRows={setSuperRows}/>
       </>}
       <input style={{...inp,marginTop:type==="super"?8:0}} placeholder="Note (optional)" value={n} onChange={e=>sn(e.target.value)}/>
       <div style={rw}>
@@ -540,7 +594,6 @@ export default function App(){
       longPressTimer.current=setTimeout(()=>{
         dragState.current={active:true,idx:i};
         setDragging(i);
-        // vibrate feedback if available
         if(navigator.vibrate) navigator.vibrate(40);
       },350);
     };
@@ -560,7 +613,6 @@ export default function App(){
       });
       if(over!==null&&over!==dragState.current.idx) setDragOver(over);
     };
-
     const onTouchEnd=()=>{
       clearTimeout(longPressTimer.current);
       if(dragState.current.active){
@@ -584,7 +636,7 @@ export default function App(){
         {localSets.map((s,i)=>{
           const type=s.type||"normal";
           const isDragging=dragging===i;
-          const isOver=dragOver===i;
+          const isOver=dragOver===i&&dragging!==null&&dragging!==i;
           const typeTag=type!=="normal"
             ?<span style={{fontSize:9,background:type==="drop"?"#2a1500":"#001a2a",color:type==="drop"?"#ff8800":"#00aaff",borderRadius:4,padding:"1px 6px",letterSpacing:1,textTransform:"uppercase",marginLeft:6}}>{type}</span>
             :null;
@@ -597,7 +649,6 @@ export default function App(){
                 transition:"opacity 0.15s,border-color 0.1s,transform 0.1s",
               }}>
               <div style={{display:"flex",alignItems:"center",gap:8}}>
-                {/* Long-press drag handle */}
                 <span
                   style={{fontSize:16,color:isDragging?"#c8f72c":"#383838",padding:"6px 8px",flexShrink:0,cursor:"grab",userSelect:"none"}}
                   onTouchStart={e=>startLongPress(i,e)}
@@ -1120,45 +1171,110 @@ export default function App(){
     );
   }
 
-  // ── DAY DETAIL ───────────────────────────────────────────
   function DayDetail(){
-    const daySessions=getAllSessions(data.muscles).filter(s=>s.date===viewDay);
+    const allDaySessions=getAllSessions(data.muscles).filter(s=>s.date===viewDay);
+    const [localSessions,setLocalSessions]=useState(allDaySessions);
+    const [dragging,setDragging]=useState(null);
+    const [dragOver,setDragOver]=useState(null);
+    const longPressTimer=useRef(null);
+    const rowRefs=useRef([]);
+    const dragState=useRef({active:false,idx:null});
+
+    useEffect(()=>setLocalSessions(getAllSessions(data.muscles).filter(s=>s.date===viewDay)),[data,viewDay]);
+
+    if(!localSessions.length||localSessions===undefined) return null;
+
+    const startLongPress=(i,e)=>{
+      e.stopPropagation();
+      longPressTimer.current=setTimeout(()=>{
+        dragState.current={active:true,idx:i};
+        setDragging(i);
+        if(navigator.vibrate) navigator.vibrate(40);
+      },350);
+    };
+    const cancelLongPress=()=>{
+      clearTimeout(longPressTimer.current);
+    };
+    const onTouchMove=(e)=>{
+      if(!dragState.current.active) return;
+      e.preventDefault();
+      const y=e.touches[0].clientY;
+      let over=null;
+      rowRefs.current.forEach((ref,i)=>{
+        if(!ref) return;
+        const rect=ref.getBoundingClientRect();
+        if(y>=rect.top&&y<=rect.bottom) over=i;
+      });
+      if(over!==null&&over!==dragState.current.idx) setDragOver(over);
+    };
+    const onTouchEnd=()=>{
+      clearTimeout(longPressTimer.current);
+      if(dragState.current.active){
+        const from=dragState.current.idx;
+        const to=dragOver;
+        if(from!==null&&to!==null&&from!==to){
+          const arr=[...localSessions];
+          const [moved]=arr.splice(from,1);
+          arr.splice(to,0,moved);
+          setLocalSessions(arr);
+          reorderDaySessions(arr);
+        }
+      }
+      dragState.current={active:false,idx:null};
+      setDragging(null);
+      setDragOver(null);
+    };
+
     return (
       <div style={{minHeight:"100vh",display:"flex",flexDirection:"column"}}>
         <div style={hdr}>
           <button style={bkBtn} onClick={()=>setScreen("home")}>← Back</button>
           <div style={{flex:1,minWidth:0}}>
             <div style={ttl}>{viewDay?fmtDate(viewDay):""}</div>
-            <div style={sub}>{daySessions.length} exercises</div>
+            <div style={sub}>{localSessions.length} exercises</div>
           </div>
         </div>
         <div ref={scrollRef} style={{flex:1,overflowY:"auto",paddingBottom:110}}>
-          {daySessions.length===0&&<div style={mpt}>No exercises logged<br/>Tap Add Exercise below</div>}
-          {daySessions.map(s=>{
-            const maxW=s.sets.filter(t=>t.weight!=null).length?Math.max(...s.sets.filter(t=>t.weight!=null).map(t=>t.weight)):0;
-            const vol =s.sets.filter(t=>t.weight!=null).reduce((a,t)=>a+t.weight*t.reps,0);
-            return(
-              <div key={s.id} style={crd}
-                onClick={()=>{ prevScreen.current="day"; setViewSid({mId:s.mId,eId:s.eId,sid:s.id}); setScreen("exercise"); }}
-                onMouseEnter={e=>e.currentTarget.style.borderColor="#2a2a2a"}
-                onMouseLeave={e=>e.currentTarget.style.borderColor=C.border}>
-                <MuscleIcon muscle={s.mName} size={38}/>
-                <div style={{flex:1,minWidth:0}}>
-                  <div style={{fontWeight:600,fontSize:14}}>{s.eName}</div>
-                  <div style={{fontSize:11,color:C.muted,marginTop:3}}>
-                    {s.mName} · {s.sets.length} sets{maxW>0?` · Max ${maxW}kg`:""}
-                    {vol>0?` · Vol ${vol}kg`:""}
+          {localSessions.length===0&&<div style={mpt}>No exercises logged<br/>Tap Add Exercise below</div>}
+          <div onTouchMove={onTouchMove} onTouchEnd={onTouchEnd}>
+            {localSessions.map((s,i)=>{
+              const maxW=s.sets.filter(t=>t.weight!=null).length?Math.max(...s.sets.filter(t=>t.weight!=null).map(t=>t.weight)):0;
+              const vol =s.sets.filter(t=>t.weight!=null).reduce((a,t)=>a+t.weight*t.reps,0);
+              const isDragging=dragging===i;
+              const isOver=dragOver===i&&dragging!==null&&dragging!==i;
+              return(
+                <div key={s.id} ref={el=>rowRefs.current[i]=el}
+                  style={{...crd,
+                    opacity:isDragging?0.35:1,
+                    borderColor:isOver?C.green:C.border,
+                    transform:isOver?"translateY(-2px)":"translateY(0)",
+                    transition:"opacity 0.15s,border-color 0.1s,transform 0.1s",
+                  }}>
+                  <span
+                    style={{fontSize:16,color:isDragging?"#c8f72c":"#2e2e2e",padding:"6px 8px",flexShrink:0,cursor:"grab",userSelect:"none"}}
+                    onTouchStart={e=>startLongPress(i,e)}
+                    onTouchEnd={cancelLongPress}
+                    onMouseDown={e=>e.stopPropagation()}>⠿</span>
+                  <div style={{flex:1,minWidth:0,display:"flex",alignItems:"center",gap:12,cursor:"pointer"}}
+                    onClick={()=>{ prevScreen.current="day"; setViewSid({mId:s.mId,eId:s.eId,sid:s.id}); setScreen("exercise"); }}>
+                    <MuscleIcon muscle={s.mName} size={38}/>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{fontWeight:600,fontSize:14}}>{s.eName}</div>
+                      <div style={{fontSize:11,color:C.muted,marginTop:3}}>
+                        {s.mName} · {s.sets.length} sets{maxW>0?` · Max ${maxW}kg`:""}
+                        {vol>0?` · Vol ${vol}kg`:""}
+                      </div>
+                      {s.note&&<div style={{fontSize:11,color:"#3a5818",marginTop:3,fontStyle:"italic"}}>"{s.note}"</div>}
+                    </div>
                   </div>
-                  {s.note&&<div style={{fontSize:11,color:"#3a5818",marginTop:3,fontStyle:"italic"}}>"{s.note}"</div>}
+                  <button style={dBtn}
+                    onClick={e=>{e.stopPropagation();setModal({type:"confirm",msg:"Delete this exercise?",onOk:()=>delSession(s.mId,s.eId,s.id)});}}
+                    onMouseEnter={e=>e.currentTarget.style.color="#cc2222"}
+                    onMouseLeave={e=>e.currentTarget.style.color="#252525"}>✕</button>
                 </div>
-                <button style={dBtn}
-                  onClick={e=>{e.stopPropagation();setModal({type:"confirm",msg:"Delete this exercise?",onOk:()=>delSession(s.mId,s.eId,s.id)});}}
-                  onMouseEnter={e=>e.currentTarget.style.color="#cc2222"}
-                  onMouseLeave={e=>e.currentTarget.style.color="#252525"}>✕</button>
-              </div>
-            );
-          })}
-
+              );
+            })}
+          </div>
         </div>
         <FloatBtn label="＋  Add Exercise" onClick={()=>setWizard({step:"muscle",date:viewDay})} visible={fabVisible}/>
       </div>
