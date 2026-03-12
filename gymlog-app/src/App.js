@@ -3,7 +3,13 @@ import React, { useState, useEffect, useRef, useCallback } from "react";
 // Storage: WebView localStorage, physical path on Android:
 // /data/data/com.gymlog.app/app_webview/Default/Local Storage/leveldb/
 // Access via Android Studio → View → Tool Windows → Device File Explorer
-const STORAGE_KEY = "gymlog/v4/data";
+const STORAGE_KEY = "gymlog/v5/data";
+
+// ── Default first user ───────────────────────────────────────
+function makeDefaultUser(name="Me"){
+  return { id: uid0(), name, muscles: DEFAULT_MUSCLES.map(m=>({...m,exercises:m.exercises.map(e=>({...e,sessions:[]})) })) };
+}
+function uid0(){ return Math.random().toString(36).slice(2,10)+Date.now().toString(36); }
 
 // ── Anatomical icons ────────────────────────────────────────
 const MuscleIcon = ({ muscle, size = 48 }) => {
@@ -87,7 +93,22 @@ const DEFAULT_MUSCLES = [
 
 function uid(){ return Math.random().toString(36).slice(2,10)+Date.now().toString(36); }
 function fmtDate(iso){ return new Date(iso).toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric",year:"numeric"}); }
-function initData(){ try{ const s=localStorage.getItem(STORAGE_KEY); if(s) return JSON.parse(s); }catch{} return {muscles:DEFAULT_MUSCLES}; }
+function initData(){
+  try{
+    const s=localStorage.getItem(STORAGE_KEY);
+    if(s){
+      const d=JSON.parse(s);
+      // migrate old format (has muscles at top level)
+      if(d.muscles&&!d.users){
+        const u={id:uid(),name:"Me",muscles:d.muscles};
+        return {users:[u],activeUserId:u.id};
+      }
+      return d;
+    }
+  }catch{}
+  const u=makeDefaultUser("Me");
+  return {users:[u],activeUserId:u.id};
+}
 
 function getAllSessions(muscles){
   const out=[];
@@ -145,9 +166,32 @@ export default function App(){
   const fabVisible    = useScrollVisible(scrollRef);
   const wizFabVisible = useScrollVisible(wScrollRef);
 
-  useEffect(()=>{ try{localStorage.setItem(STORAGE_KEY,JSON.stringify(data));}catch{} },[data]);
+  // ── Active user helpers ──────────────────────────────────
+  const activeUser = data.users.find(u=>u.id===data.activeUserId) || data.users[0];
+  const muscles = activeUser?.muscles || [];
 
-  // Close sidebar on outside tap
+  const switchUser = (uid) => {
+    setData(d=>({...d,activeUserId:uid}));
+    setScreen("home"); setWizard(null); setModal(null);
+  };
+  const addUser = (name) => {
+    const u = makeDefaultUser(name);
+    setData(d=>({...d,users:[...d.users,u],activeUserId:u.id}));
+    setScreen("home"); setWizard(null);
+  };
+  const delUser = (uid) => {
+    setData(d=>{
+      const users=d.users.filter(u=>u.id!==uid);
+      const activeUserId=d.activeUserId===uid?(users[0]?.id||null):d.activeUserId;
+      return {...d,users,activeUserId};
+    });
+  };
+  const renameUser = (uid,name) => setData(d=>({...d,users:d.users.map(u=>u.id===uid?{...u,name}:u)}));
+
+  // ── Update active user's muscles ─────────────────────────
+  const setMuscles = (fn) => setData(d=>({...d,users:d.users.map(u=>u.id===activeUser.id?{...u,muscles:fn(u.muscles)}:u)}));
+
+  useEffect(()=>{ try{localStorage.setItem(STORAGE_KEY,JSON.stringify(data));}catch{} },[data]);
   useEffect(()=>{
     if(!sidebar) return;
     const fn=e=>{ if(sideRef.current&&!sideRef.current.contains(e.target)) setSidebar(false); };
@@ -184,8 +228,8 @@ export default function App(){
     if(anatomyOpen){setAnatomyOpen(false);setScreen("home");return;}
     if(wizard){
       const {step}=wizard;
-      if(step==="sets")     {setWizard(w=>({...w,step:"exercise"}));return;}
-      if(step==="exercise") {setWizard(w=>({...w,step:"muscle"}));return;}
+      if(step==="sets")        {setWizard(w=>({...w,step:"exercise"}));return;}
+      if(step==="exercise")    {setWizard(w=>({...w,step:"muscle",eId:null,sid:null}));return;}
       setWizard(null); return;
     }
     // exercise detail goes back to wherever it was opened from
@@ -198,57 +242,62 @@ export default function App(){
   }
 
   // ── Lookups ──────────────────────────────────────────────
-  const getMuscle = mId => data.muscles.find(m=>m.id===mId);
+  const getMuscle = mId => muscles.find(m=>m.id===mId);
   const getEx     = (mId,eId) => getMuscle(mId)?.exercises.find(e=>e.id===eId);
   const getSess   = (mId,eId,sid) => getEx(mId,eId)?.sessions.find(s=>s.id===sid);
   const sortEx    = es => [...es].sort((a,b)=>(b.lastEdited||0)-(a.lastEdited||0));
   const sortSess  = ss => [...ss].sort((a,b)=>new Date(b.date)-new Date(a.date));
 
   // ── Mutations ────────────────────────────────────────────
-  const addMuscle  = n => setData(d=>({...d,muscles:[...d.muscles,{id:uid(),name:n,lastEdited:Date.now(),exercises:[]}]}));
-  const delMuscle  = mId => setData(d=>({...d,muscles:d.muscles.filter(m=>m.id!==mId)}));
+  const addMuscle  = n => setMuscles(ms=>[...ms,{id:uid(),name:n,lastEdited:Date.now(),exercises:[]}]);
+  const delMuscle  = mId => setMuscles(ms=>ms.filter(m=>m.id!==mId));
   const addEx      = (mId,n)=>{
     const now=Date.now();
-    setData(d=>({...d,muscles:d.muscles.map(m=>{
+    setMuscles(ms=>ms.map(m=>{
       if(m.id!==mId) return m;
-      // Skip if exercise with same name already exists (case-insensitive)
       const exists=m.exercises.some(e=>e.name.trim().toLowerCase()===n.trim().toLowerCase());
       if(exists) return m;
       return {...m,lastEdited:now,exercises:[...m.exercises,{id:uid(),name:n,sessions:[],lastEdited:now}]};
-    })}));
+    }));
   };
-  const delEx      = (mId,eId) => setData(d=>({...d,muscles:d.muscles.map(m=>m.id===mId?{...m,exercises:m.exercises.filter(e=>e.id!==eId)}:m)}));
-  const renameEx   = (mId,eId,name) => setData(d=>({...d,muscles:d.muscles.map(m=>m.id===mId?{...m,exercises:m.exercises.map(e=>e.id===eId?{...e,name}:e)}:m)}));
+  const delEx      = (mId,eId) => setMuscles(ms=>ms.map(m=>m.id===mId?{...m,exercises:m.exercises.filter(e=>e.id!==eId)}:m));
+  const renameEx   = (mId,eId,name) => setMuscles(ms=>ms.map(m=>m.id===mId?{...m,exercises:m.exercises.map(e=>e.id===eId?{...e,name}:e)}:m));
   const addSession = (mId,eId,date)=>{
     const s={id:uid(),date,note:"",sets:[]}; const now=Date.now();
-    setData(d=>({...d,muscles:d.muscles.map(m=>m.id===mId?{...m,lastEdited:now,exercises:m.exercises.map(e=>e.id===eId?{...e,lastEdited:now,sessions:[...e.sessions,s]}:e)}:m)}));
+    setMuscles(ms=>ms.map(m=>m.id===mId?{...m,lastEdited:now,exercises:m.exercises.map(e=>e.id===eId?{...e,lastEdited:now,sessions:[...e.sessions,s]}:e)}:m));
     return s.id;
   };
-  const delSession = (mId,eId,sid) => setData(d=>({...d,muscles:d.muscles.map(m=>m.id===mId?{...m,exercises:m.exercises.map(e=>e.id===eId?{...e,sessions:e.sessions.filter(s=>s.id!==sid)}:e)}:m)}));
+  const delSession = (mId,eId,sid) => setMuscles(ms=>ms.map(m=>m.id===mId?{...m,exercises:m.exercises.map(e=>e.id===eId?{...e,sessions:e.sessions.filter(s=>s.id!==sid)}:e)}:m));
   const addSet     = (mId,eId,sid,setData_)=>{
     const set={id:uid(), type:"normal", weight:null, reps:0, note:"", dropSets:[], superSets:[], ...setData_};
     const now=Date.now();
-    setData(d=>({...d,muscles:d.muscles.map(m=>m.id===mId?{...m,lastEdited:now,exercises:m.exercises.map(e=>e.id===eId?{...e,lastEdited:now,sessions:e.sessions.map(s=>s.id===sid?{...s,sets:[...s.sets,set]}:s)}:e)}:m)}));
+    setMuscles(ms=>ms.map(m=>m.id===mId?{...m,lastEdited:now,exercises:m.exercises.map(e=>e.id===eId?{...e,lastEdited:now,sessions:e.sessions.map(s=>s.id===sid?{...s,sets:[...s.sets,set]}:s)}:e)}:m));
   };
-  const delSet     = (mId,eId,sid,setId) => setData(d=>({...d,muscles:d.muscles.map(m=>m.id===mId?{...m,exercises:m.exercises.map(e=>e.id===eId?{...e,sessions:e.sessions.map(s=>s.id===sid?{...s,sets:s.sets.filter(t=>t.id!==setId)}:s)}:e)}:m)}));
-  const updateSet  = (mId,eId,sid,setId,patch) => setData(d=>({...d,muscles:d.muscles.map(m=>m.id===mId?{...m,exercises:m.exercises.map(e=>e.id===eId?{...e,sessions:e.sessions.map(s=>s.id===sid?{...s,sets:s.sets.map(t=>t.id===setId?{...t,...patch}:t)}:s)}:e)}:m)}));
-  const reorderSets= (mId,eId,sid,newSets) => setData(d=>({...d,muscles:d.muscles.map(m=>m.id===mId?{...m,exercises:m.exercises.map(e=>e.id===eId?{...e,sessions:e.sessions.map(s=>s.id===sid?{...s,sets:newSets}:s)}:e)}:m)}));
-  // Reorder exercises shown on a day — stores a sortOrder index on each session
+  const delSet     = (mId,eId,sid,setId) => setMuscles(ms=>ms.map(m=>m.id===mId?{...m,exercises:m.exercises.map(e=>e.id===eId?{...e,sessions:e.sessions.map(s=>s.id===sid?{...s,sets:s.sets.filter(t=>t.id!==setId)}:s)}:e)}:m));
+  const updateSet  = (mId,eId,sid,setId,patch) => setMuscles(ms=>ms.map(m=>m.id===mId?{...m,exercises:m.exercises.map(e=>e.id===eId?{...e,sessions:e.sessions.map(s=>s.id===sid?{...s,sets:s.sets.map(t=>t.id===setId?{...t,...patch}:t)}:s)}:e)}:m));
+  const reorderSets= (mId,eId,sid,newSets) => setMuscles(ms=>ms.map(m=>m.id===mId?{...m,exercises:m.exercises.map(e=>e.id===eId?{...e,sessions:e.sessions.map(s=>s.id===sid?{...s,sets:newSets}:s)}:e)}:m));
   const reorderDaySessions = (orderedSessions) => {
-    setData(d=>{
-      const muscles=[...d.muscles.map(m=>({...m,exercises:m.exercises.map(e=>({...e,sessions:[...e.sessions]}))}))];
+    setMuscles(ms=>{
+      const newMs=[...ms.map(m=>({...m,exercises:m.exercises.map(e=>({...e,sessions:[...e.sessions]}))}))];
       orderedSessions.forEach((s,i)=>{
-        const m=muscles.find(m=>m.id===s.mId);
+        const m=newMs.find(m=>m.id===s.mId);
         if(!m) return;
         const ex=m.exercises.find(e=>e.id===s.eId);
         if(!ex) return;
         const si=ex.sessions.findIndex(ss=>ss.id===s.id);
         if(si!==-1) ex.sessions[si]={...ex.sessions[si],dayOrder:i};
       });
-      return {...d,muscles};
+      return newMs;
     });
   };
-  const updateNote = (mId,eId,sid,note) => setData(d=>({...d,muscles:d.muscles.map(m=>m.id===mId?{...m,exercises:m.exercises.map(e=>e.id===eId?{...e,sessions:e.sessions.map(s=>s.id===sid?{...s,note}:s)}:e)}:m)}));
+  const updateNote = (mId,eId,sid,note) => setMuscles(ms=>ms.map(m=>m.id===mId?{...m,exercises:m.exercises.map(e=>e.id===eId?{...e,sessions:e.sessions.map(s=>s.id===sid?{...s,note}:s)}:e)}:m));
+
+  // ── Daily body weight (per user, per date) ───────────────
+  const dailyWeights = activeUser?.dailyWeights || {};
+  const setDayWeight = (date, kg) => setData(d=>({...d,users:d.users.map(u=>u.id===activeUser.id
+    ? {...u, dailyWeights:{...(u.dailyWeights||{}), [date]: kg==null?undefined:kg}}
+    : u
+  )}));
 
   // ── Design tokens ────────────────────────────────────────
   const C={green:"#c8f72c",bg:"#0a0a0a",card:"#111",border:"#1a1a1a",text:"#e8e8e8",muted:"#484848",dim:"#2a2a2a",red:"#e8341a"};
@@ -343,7 +392,7 @@ export default function App(){
     // Drop set rows
     const [drops,setDrops]=useState([{id:uid(),w:"",r:""}]);
     // Super set: selected exercises + their w/r
-    const allEx=data.muscles.flatMap(m=>m.exercises.map(e=>({...e,mId:m.id,mName:m.name})));
+    const allEx=muscles.flatMap(m=>m.exercises.map(e=>({...e,mId:m.id,mName:m.name})));
     const [superEx,setSuperEx]=useState([]); // [{eId,mId,mName,name,w,r}]
     const [exSearch,setExSearch]=useState("");
 
@@ -466,7 +515,7 @@ export default function App(){
   // Shared exercise search widget for super set add
   function SuperExSearch({superRows,setSuperRows}){
     const [q,setQ]=useState("");
-    const allEx=data.muscles.flatMap(m=>m.exercises.map(e=>({...e,mId:m.id,mName:m.name})));
+    const allEx=muscles.flatMap(m=>m.exercises.map(e=>({...e,mId:m.id,mName:m.name})));
     const filtered=allEx.filter(e=>
       e.name.toLowerCase().includes(q.toLowerCase())&&
       !superRows.find(s=>s.eId===e.id)
@@ -575,6 +624,38 @@ export default function App(){
       <div style={rw}>
         <button style={btn()} onMouseDown={e=>{e.stopPropagation();setModal(null);}}>Cancel</button>
         <button style={btn(false,true)} onMouseDown={e=>{e.stopPropagation();onOk();setModal(null);}}>Delete</button>
+      </div>
+    </Wrap>;
+  }
+
+  function DayWeightModal({date}){
+    const existing = dailyWeights[date];
+    const [val,setVal] = useState(existing!=null?String(existing):"");
+    const doSave = () => {
+      const kg = parseFloat(val);
+      if(!isNaN(kg)&&kg>0){ setDayWeight(date,kg); }
+      setModal(null);
+    };
+    const doClear = () => { setDayWeight(date,null); setModal(null); };
+    return <Wrap>
+      <div style={mTtl}>{existing!=null?"Edit Body Weight":"Log Body Weight"}</div>
+      <div style={{fontSize:11,color:"#444",letterSpacing:1,marginBottom:12}}>{fmtDate(date)}</div>
+      <div style={{position:"relative",marginBottom:14}}>
+        <input
+          type="number"
+          autoFocus
+          style={{...inp,marginBottom:0,paddingRight:44,fontSize:22,textAlign:"center",color:C.green,fontWeight:700}}
+          placeholder="0.0"
+          value={val}
+          onChange={e=>setVal(e.target.value)}
+          onKeyDown={e=>{ if(e.key==="Enter") doSave(); }}
+        />
+        <span style={{position:"absolute",right:14,top:"50%",transform:"translateY(-50%)",fontSize:13,color:"#555",...T}}>kg</span>
+      </div>
+      <div style={rw}>
+        {existing!=null&&<button style={{...btn(false,true),flex:"0 0 auto",padding:"14px 18px",fontSize:11}} onMouseDown={e=>{e.stopPropagation();doClear();}}>Clear</button>}
+        <button style={btn()} onMouseDown={e=>{e.stopPropagation();setModal(null);}}>Cancel</button>
+        <button style={btn(true,!val)} onMouseDown={e=>{e.stopPropagation();doSave();}}>Save</button>
       </div>
     </Wrap>;
   }
@@ -742,13 +823,15 @@ export default function App(){
   // ── SIDEBAR ───────────────────────────────────────────────
   function Sidebar(){
     const [sbSearch,setSbSearch]=useState("");
+    const [renamingUid,setRenamingUid]=useState(null);
+    const [renameVal,setRenameVal]=useState("");
+    const [usersOpen,setUsersOpen]=useState(true);
+    const [exercisesOpen,setExercisesOpen]=useState(true);
     const trimmed=sbSearch.trim().toLowerCase();
 
-    // When searching: flatten all exercises across muscles, filter, show grouped
     const allExFiltered = trimmed
-      ? data.muscles.flatMap(m=>
-          m.exercises
-            .filter(e=>e.name.toLowerCase().includes(trimmed))
+      ? muscles.flatMap(m=>
+          m.exercises.filter(e=>e.name.toLowerCase().includes(trimmed))
             .map(e=>({...e,mId:m.id,mName:m.name}))
         )
       : null;
@@ -760,6 +843,15 @@ export default function App(){
       return <>{name.slice(0,idx)}<span style={{color:C.green,fontWeight:700}}>{name.slice(idx,idx+sbSearch.length)}</span>{name.slice(idx+sbSearch.length)}</>;
     };
 
+    const SectionHeader=({label,open,onToggle})=>(
+      <div style={{display:"flex",alignItems:"center",padding:"12px 18px",cursor:"pointer",
+        background:"#0c0c0c",borderBottom:`1px solid #1a1a1a`,userSelect:"none"}}
+        onMouseDown={e=>e.stopPropagation()} onClick={onToggle}>
+        <span style={{fontSize:10,letterSpacing:3,color:"#555",textTransform:"uppercase",flex:1,fontWeight:700}}>{label}</span>
+        <span style={{fontSize:11,color:"#333"}}>{open?"▲":"▼"}</span>
+      </div>
+    );
+
     return <>
       <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.65)",zIndex:50}}/>
       <div ref={sideRef} style={{position:"fixed",top:0,left:0,bottom:0,width:"82%",maxWidth:340,
@@ -768,108 +860,165 @@ export default function App(){
         onTouchEnd={e=>{const s=sideSwipeRef.current;if(!s)return;const dx=s.x-e.changedTouches[0].clientX;const dy=Math.abs(s.y-e.changedTouches[0].clientY);if(dx>50&&dy<60){setSidebar(false);}sideSwipeRef.current=null;}}>
 
         <div style={{padding:"44px 18px 14px",borderBottom:"1px solid #1a1a1a",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
-          <div style={{fontSize:22,fontWeight:700,letterSpacing:3,textTransform:"uppercase",color:C.text}}>Muscles</div>
+          <div style={{fontSize:22,fontWeight:700,letterSpacing:3,textTransform:"uppercase",color:C.text}}>Menu</div>
           <button style={{background:"none",border:"none",color:"#555",fontSize:26,cursor:"pointer",padding:"2px 10px",lineHeight:1}}
             onClick={()=>setSidebar(false)}>✕</button>
         </div>
 
-        {/* Scrollable content area */}
         <div style={{flex:1,overflowY:"auto",display:"flex",flexDirection:"column"}}>
 
-        {/* Search bar */}
-        <div style={{padding:"10px 14px 10px",borderBottom:"1px solid #141414",background:"#0f0f0f",position:"sticky",top:0,zIndex:10}}
-          onMouseDown={e=>e.stopPropagation()}>
-          <div style={{position:"relative",display:"flex",alignItems:"center"}}>
-            <span style={{position:"absolute",left:13,fontSize:14,color:"#3a3a3a",pointerEvents:"none"}}>⌕</span>
-            <input
-              style={{...inp,marginBottom:0,paddingLeft:36,background:"#0a0a0a",border:"1px solid #1e1e1e",fontSize:14}}
-              placeholder="Search exercises…"
-              value={sbSearch}
-              onChange={e=>setSbSearch(e.target.value)}
-            />
-            {sbSearch&&<button
-              style={{position:"absolute",right:10,background:"none",border:"none",color:"#555",cursor:"pointer",fontSize:16,padding:"4px",lineHeight:1}}
-              onMouseDown={e=>{e.preventDefault();e.stopPropagation();setSbSearch("");}}>✕</button>}
-          </div>
-        </div>
-
-        {/* Search results mode */}
-        {allExFiltered ? (
-          <div>
-            {allExFiltered.length===0&&<div style={{...mpt,fontSize:12}}>No exercises match<br/>"{sbSearch}"</div>}
-            {allExFiltered.map(e=>{
-              const last=sortSess(e.sessions)[0];
-              const maxW=last?.sets.filter(s=>s.weight!=null).length?Math.max(...last.sets.filter(s=>s.weight!=null).map(s=>s.weight)):0;
-              return(
-                <div key={e.id}
-                  style={{display:"flex",alignItems:"center",padding:"12px 18px",borderBottom:"1px solid #111"}}
-                  onMouseDown={ev=>ev.stopPropagation()}>
-                  <div style={{flex:1,minWidth:0}}>
-                    <div style={{fontSize:16,color:"#bbb",cursor:"pointer",marginBottom:2}}
-                      onMouseDown={ev=>{ev.stopPropagation();setSidebar(false);setViewEx({mId:e.mId,eId:e.id});setScreen("exHistory");}}>
-                      {hiText(e.name)}
+          {/* ── USERS SECTION ── */}
+          <div style={{borderBottom:"1px solid #1a1a1a"}}>
+            <SectionHeader label="Users" open={usersOpen} onToggle={()=>setUsersOpen(o=>!o)}/>
+            {usersOpen&&<>
+              {data.users.map(u=>{
+                const isActive=u.id===data.activeUserId;
+                const totalSessions=u.muscles.flatMap(m=>m.exercises.flatMap(e=>e.sessions)).length;
+                return(
+                  <div key={u.id} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 18px",
+                    background:isActive?"#141a00":"transparent",
+                    borderLeft:isActive?`3px solid ${C.green}`:"3px solid transparent",
+                    cursor:"pointer"}}
+                    onMouseDown={e=>e.stopPropagation()}
+                    onClick={()=>{if(!isActive){switchUser(u.id);setSidebar(false);}}}>
+                    <div style={{width:36,height:36,borderRadius:"50%",
+                      background:isActive?C.green:"#1e1e1e",
+                      border:`2px solid ${isActive?C.green:"#2a2a2a"}`,
+                      display:"flex",alignItems:"center",justifyContent:"center",
+                      fontSize:14,fontWeight:700,color:isActive?"#000":"#555",flexShrink:0}}>
+                      {u.name.charAt(0).toUpperCase()}
                     </div>
-                    <div style={{fontSize:12,color:"#383838"}}>{e.mName}{maxW>0?` · ${maxW}kg`:""}</div>
+                    <div style={{flex:1,minWidth:0}}>
+                      {renamingUid===u.id
+                        ? <input
+                            style={{...inp,marginBottom:0,padding:"4px 8px",fontSize:13,width:"100%"}}
+                            autoFocus value={renameVal}
+                            onChange={e=>setRenameVal(e.target.value)}
+                            onBlur={()=>{if(renameVal.trim())renameUser(u.id,renameVal.trim());setRenamingUid(null);}}
+                            onKeyDown={e=>{if(e.key==="Enter"){if(renameVal.trim())renameUser(u.id,renameVal.trim());setRenamingUid(null);}if(e.key==="Escape")setRenamingUid(null);}}
+                            onClick={e=>e.stopPropagation()}
+                          />
+                        : <>
+                            <div style={{fontSize:14,fontWeight:isActive?700:500,color:isActive?C.green:"#888",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{u.name}</div>
+                            <div style={{fontSize:10,color:"#333",marginTop:1}}>{totalSessions} session{totalSessions!==1?"s":""}</div>
+                          </>
+                      }
+                    </div>
+                    <button style={{...dBtn,fontSize:13,color:"#2a2a2a",padding:"4px 6px"}}
+                      onMouseDown={ev=>{ev.preventDefault();ev.stopPropagation();setRenamingUid(u.id);setRenameVal(u.name);}}
+                      onMouseEnter={ev=>ev.currentTarget.style.color=C.green}
+                      onMouseLeave={ev=>ev.currentTarget.style.color="#2a2a2a"}>✎</button>
+                    {data.users.length>1&&<button style={{...dBtn,fontSize:14,color:"#2a2a2a",padding:"4px 6px"}}
+                      onMouseDown={ev=>{ev.preventDefault();ev.stopPropagation();setModal({type:"confirm",msg:`Delete user "${u.name}" and all their data?`,onOk:()=>delUser(u.id)});}}
+                      onMouseEnter={ev=>ev.currentTarget.style.color="#cc2222"}
+                      onMouseLeave={ev=>ev.currentTarget.style.color="#2a2a2a"}>✕</button>}
                   </div>
-                  <button style={{...dBtn,fontSize:14,color:"#2a2a2a",marginRight:2}}
-                    onMouseDown={ev=>{ev.preventDefault();ev.stopPropagation();setModal({type:"editEx",mId:e.mId,eId:e.id,current:e.name});}}
-                    onMouseEnter={ev=>ev.currentTarget.style.color="#c8f72c"}
-                    onMouseLeave={ev=>ev.currentTarget.style.color="#2a2a2a"}>✎</button>
-                  <button style={{...dBtn,fontSize:16,color:"#2a2a2a"}}
-                    onMouseDown={ev=>{ev.preventDefault();ev.stopPropagation();setModal({type:"confirm",msg:`Delete "${e.name}" and all its sessions?`,onOk:()=>delEx(e.mId,e.id)});}}
-                    onMouseEnter={ev=>ev.currentTarget.style.color="#cc2222"}
-                    onMouseLeave={ev=>ev.currentTarget.style.color="#2a2a2a"}>✕</button>
-                </div>
-              );
-            })}
+                );
+              })}
+              <div style={{padding:"10px 18px",fontSize:13,color:"#2a5000",cursor:"pointer",fontWeight:600,borderTop:"1px solid #141414"}}
+                onMouseDown={e=>e.stopPropagation()}
+                onClick={()=>setModal({type:"addUser"})}>+ Add User</div>
+            </>}
           </div>
-        ) : (
-          /* Normal muscle/exercise browse mode */
-          data.muscles.map(m=>(
-            <div key={m.id} style={{borderBottom:"1px solid #141414"}}>
-              <div style={{display:"flex",alignItems:"center",gap:12,padding:"16px 18px",cursor:"pointer"}}
-                onMouseDown={e=>{e.stopPropagation();setSbOpen(o=>({...o,[m.id]:!o[m.id]}));}}>
-                <MuscleIcon muscle={m.name} size={36}/>
-                <span style={{fontSize:22,fontWeight:700,color:"#ddd",flex:1,letterSpacing:0.5}}>{m.name}</span>
-                <span style={{fontSize:14,color:"#3a3a3a",marginRight:6}}>{m.exercises.length}</span>
-                <span style={{fontSize:14,color:"#3a3a3a"}}>{sbOpen[m.id]?"▲":"▼"}</span>
+
+          {/* ── EXERCISES SECTION ── */}
+          <div>
+            <SectionHeader label={`Exercises · ${activeUser?.name||""}`} open={exercisesOpen} onToggle={()=>setExercisesOpen(o=>!o)}/>
+            {exercisesOpen&&<>
+              {/* Search bar */}
+              <div style={{padding:"8px 14px",borderBottom:"1px solid #141414"}}
+                onMouseDown={e=>e.stopPropagation()}>
+                <div style={{position:"relative",display:"flex",alignItems:"center"}}>
+                  <span style={{position:"absolute",left:13,fontSize:14,color:"#3a3a3a",pointerEvents:"none"}}>⌕</span>
+                  <input
+                    style={{...inp,marginBottom:0,paddingLeft:36,background:"#0a0a0a",border:"1px solid #1e1e1e",fontSize:13}}
+                    placeholder="Search exercises…"
+                    value={sbSearch}
+                    onChange={e=>setSbSearch(e.target.value)}
+                  />
+                  {sbSearch&&<button
+                    style={{position:"absolute",right:10,background:"none",border:"none",color:"#555",cursor:"pointer",fontSize:16,padding:"4px",lineHeight:1}}
+                    onMouseDown={e=>{e.preventDefault();e.stopPropagation();setSbSearch("");}}>✕</button>}
+                </div>
               </div>
-              {sbOpen[m.id]&&(
-                <div style={{paddingBottom:8}}>
-                  {sortEx(m.exercises).map(e=>{
+
+              {allExFiltered ? (
+                <div>
+                  {allExFiltered.length===0&&<div style={{...mpt,fontSize:12}}>No exercises match<br/>"{sbSearch}"</div>}
+                  {allExFiltered.map(e=>{
                     const last=sortSess(e.sessions)[0];
                     const maxW=last?.sets.filter(s=>s.weight!=null).length?Math.max(...last.sets.filter(s=>s.weight!=null).map(s=>s.weight)):0;
                     return(
                       <div key={e.id}
-                        style={{display:"flex",alignItems:"center",padding:"10px 18px 10px 68px",borderTop:"1px solid #111"}}
-                        onMouseDown={e=>e.stopPropagation()}>
-                        <span style={{flex:1,fontSize:16,color:"#888",cursor:"pointer"}}
-                          onMouseDown={ev=>{ev.stopPropagation();setSidebar(false);setViewEx({mId:m.id,eId:e.id});setScreen("exHistory");}}>
-                          {e.name}
-                        </span>
-                        {maxW>0&&<span style={{fontSize:13,color:"#2a2a2a",marginRight:10}}>{maxW}kg</span>}
-                        <button style={{...dBtn,fontSize:14,color:"#2a2a2a",marginRight:2}}
-                          onMouseDown={ev=>{ev.preventDefault();ev.stopPropagation();setModal({type:"editEx",mId:m.id,eId:e.id,current:e.name});}}
+                        style={{display:"flex",alignItems:"center",padding:"9px 18px",borderBottom:"1px solid #111"}}
+                        onMouseDown={ev=>ev.stopPropagation()}>
+                        <div style={{flex:1,minWidth:0}}>
+                          <div style={{fontSize:12,color:"#bbb",cursor:"pointer",marginBottom:2}}
+                            onMouseDown={ev=>{ev.stopPropagation();setSidebar(false);setViewEx({mId:e.mId,eId:e.id});setScreen("exHistory");}}>
+                            {hiText(e.name)}
+                          </div>
+                          <div style={{fontSize:10,color:"#383838"}}>{e.mName}{maxW>0?` · ${maxW}kg`:""}</div>
+                        </div>
+                        <button style={{...dBtn,fontSize:13,color:"#2a2a2a",marginRight:2}}
+                          onMouseDown={ev=>{ev.preventDefault();ev.stopPropagation();setModal({type:"editEx",mId:e.mId,eId:e.id,current:e.name});}}
                           onMouseEnter={ev=>ev.currentTarget.style.color="#c8f72c"}
                           onMouseLeave={ev=>ev.currentTarget.style.color="#2a2a2a"}>✎</button>
-                        <button style={{...dBtn,fontSize:16,color:"#2a2a2a"}}
-                          onMouseDown={ev=>{ev.preventDefault();ev.stopPropagation();setModal({type:"confirm",msg:`Delete "${e.name}" and all its sessions?`,onOk:()=>delEx(m.id,e.id)});}}
+                        <button style={{...dBtn,fontSize:14,color:"#2a2a2a"}}
+                          onMouseDown={ev=>{ev.preventDefault();ev.stopPropagation();setModal({type:"confirm",msg:`Delete "${e.name}" and all its sessions?`,onOk:()=>delEx(e.mId,e.id)});}}
                           onMouseEnter={ev=>ev.currentTarget.style.color="#cc2222"}
                           onMouseLeave={ev=>ev.currentTarget.style.color="#2a2a2a"}>✕</button>
                       </div>
                     );
                   })}
-                  <div style={{padding:"10px 18px 10px 68px",fontSize:16,color:"#2a5000",cursor:"pointer",borderTop:"1px solid #111",fontWeight:600}}
-                    onMouseDown={e=>{e.stopPropagation();setModal({type:"addEx",mId:m.id});}}>+ Add exercise</div>
-                  <div style={{padding:"10px 18px 10px 68px",fontSize:16,color:"#5a1800",cursor:"pointer",borderTop:"1px solid #111",fontWeight:600}}
-                    onMouseDown={e=>{e.stopPropagation();setModal({type:"confirm",msg:`Delete "${m.name}" and all its data?`,onOk:()=>delMuscle(m.id)});}}>− Delete muscle</div>
                 </div>
+              ) : (
+                muscles.map(m=>(
+                  <div key={m.id} style={{borderBottom:"1px solid #141414"}}>
+                    <div style={{display:"flex",alignItems:"center",gap:10,padding:"12px 18px",cursor:"pointer"}}
+                      onMouseDown={e=>{e.stopPropagation();setSbOpen(o=>({...o,[m.id]:!o[m.id]}));}}>
+                      <MuscleIcon muscle={m.name} size={28}/>
+                      <span style={{fontSize:16,fontWeight:700,color:"#ddd",flex:1,letterSpacing:0.5}}>{m.name}</span>
+                      <span style={{fontSize:11,color:"#3a3a3a",marginRight:6}}>{m.exercises.length}</span>
+                      <span style={{fontSize:11,color:"#3a3a3a"}}>{sbOpen[m.id]?"▲":"▼"}</span>
+                    </div>
+                    {sbOpen[m.id]&&(
+                      <div style={{paddingBottom:4}}>
+                        {sortEx(m.exercises).map(e=>{
+                          const last=sortSess(e.sessions)[0];
+                          const maxW=last?.sets.filter(s=>s.weight!=null).length?Math.max(...last.sets.filter(s=>s.weight!=null).map(s=>s.weight)):0;
+                          return(
+                            <div key={e.id}
+                              style={{display:"flex",alignItems:"center",padding:"8px 18px 8px 58px",borderTop:"1px solid #111"}}
+                              onMouseDown={e=>e.stopPropagation()}>
+                              <span style={{flex:1,fontSize:12,color:"#888",cursor:"pointer"}}
+                                onMouseDown={ev=>{ev.stopPropagation();setSidebar(false);setViewEx({mId:m.id,eId:e.id});setScreen("exHistory");}}>
+                                {e.name}
+                              </span>
+                              {maxW>0&&<span style={{fontSize:10,color:"#2a2a2a",marginRight:8}}>{maxW}kg</span>}
+                              <button style={{...dBtn,fontSize:13,color:"#2a2a2a",marginRight:2}}
+                                onMouseDown={ev=>{ev.preventDefault();ev.stopPropagation();setModal({type:"editEx",mId:m.id,eId:e.id,current:e.name});}}
+                                onMouseEnter={ev=>ev.currentTarget.style.color="#c8f72c"}
+                                onMouseLeave={ev=>ev.currentTarget.style.color="#2a2a2a"}>✎</button>
+                              <button style={{...dBtn,fontSize:14,color:"#2a2a2a"}}
+                                onMouseDown={ev=>{ev.preventDefault();ev.stopPropagation();setModal({type:"confirm",msg:`Delete "${e.name}" and all its sessions?`,onOk:()=>delEx(m.id,e.id)});}}
+                                onMouseEnter={ev=>ev.currentTarget.style.color="#cc2222"}
+                                onMouseLeave={ev=>ev.currentTarget.style.color="#2a2a2a"}>✕</button>
+                            </div>
+                          );
+                        })}
+                        <div style={{padding:"8px 18px 8px 58px",fontSize:12,color:"#2a5000",cursor:"pointer",borderTop:"1px solid #111",fontWeight:600}}
+                          onMouseDown={e=>{e.stopPropagation();setModal({type:"addEx",mId:m.id});}}>+ Add exercise</div>
+                        <div style={{padding:"8px 18px 8px 58px",fontSize:12,color:"#5a1800",cursor:"pointer",borderTop:"1px solid #111",fontWeight:600}}
+                          onMouseDown={e=>{e.stopPropagation();setModal({type:"confirm",msg:`Delete "${m.name}" and all its data?`,onOk:()=>delMuscle(m.id)});}}>− Delete muscle</div>
+                      </div>
+                    )}
+                  </div>
+                ))
               )}
-            </div>
-          ))
-        )}
+            </>}
+          </div>
 
-        </div>{/* end scroll area */}
+        </div>
 
         {/* Fixed bottom area */}
         <div style={{flexShrink:0,borderTop:"1px solid #1a1a1a",background:"#0f0f0f",padding:"12px 18px 8px"}}>
@@ -1007,7 +1156,41 @@ export default function App(){
           </div>
         </div>
         <div ref={wScrollRef} style={{flex:1,overflowY:"auto",paddingBottom:100}}>
-          {data.muscles.map(m=>(
+          {/* ── Body weight card — once per day, optional ── */}
+          {(()=>{
+            const bw = dailyWeights[date];
+            const logged = bw!=null;
+            return (
+              <div style={{...crd,
+                borderColor: logged?"#1e3000":C.border,
+                background: logged?"#0d1400":C.card,
+                opacity: logged?1:0.7,
+              }}
+                onClick={()=>setModal({type:"dayWeight",date})}
+                onMouseEnter={e=>e.currentTarget.style.borderColor=logged?"#2a4400":"#2a2a2a"}
+                onMouseLeave={e=>e.currentTarget.style.borderColor=logged?"#1e3000":C.border}>
+                <div style={{width:44,height:44,borderRadius:10,background:logged?"#1a2e00":"#131313",
+                  border:`1px solid ${logged?"#2a4400":"#1e1e1e"}`,
+                  display:"flex",alignItems:"center",justifyContent:"center",fontSize:22,flexShrink:0}}>
+                  🏋
+                </div>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontWeight:600,fontSize:14,color:logged?C.green:C.muted}}>
+                    Body Weight
+                  </div>
+                  <div style={{fontSize:11,color:logged?"#4a7a00":C.muted,marginTop:3}}>
+                    {logged?`${bw} kg — tap to edit`:"Optional · tap to log today's weight"}
+                  </div>
+                </div>
+                <span style={{color:logged?C.green:"#2a2a2a",fontSize:logged?15:18,fontWeight:700}}>
+                  {logged?"✓":"›"}
+                </span>
+              </div>
+            );
+          })()}
+          {/* ── Separator ── */}
+          <div style={{margin:"4px 14px 0",borderTop:"1px solid #161616",paddingTop:4}}/>
+          {muscles.map(m=>(
             <div key={m.id} style={crd}
               onClick={()=>setWizard({step:"exercise",date,mId:m.id})}
               onMouseEnter={e=>e.currentTarget.style.borderColor="#2a2a2a"}
@@ -1127,7 +1310,7 @@ export default function App(){
     const [mon, setMon] = useState(today.getMonth()); // 0-indexed
 
     // Build set of all dates that have sessions
-    const sessionDates = new Set(getAllSessions(data.muscles).map(s=>s.date));
+    const sessionDates = new Set(getAllSessions(muscles).map(s=>s.date));
 
     const monthName = new Date(yr,mon,1).toLocaleString("en-US",{month:"long",year:"numeric"});
     const firstDay  = new Date(yr,mon,1).getDay(); // 0=Sun
@@ -1180,6 +1363,7 @@ export default function App(){
               const ds=dateStr(d);
               const hasSess=sessionDates.has(ds);
               const isToday=ds===todayStr;
+              const bw=dailyWeights[ds];
               return(
                 <div key={i}
                   style={{
@@ -1195,6 +1379,9 @@ export default function App(){
                   </span>
                   {hasSess&&(
                     <div style={{width:4,height:4,borderRadius:"50%",background:C.green,marginTop:2}}/>
+                  )}
+                  {bw!=null&&(
+                    <div style={{fontSize:7,color:"#4a7a00",letterSpacing:0.5,marginTop:1,lineHeight:1}}>{bw}kg</div>
                   )}
                 </div>
               );
@@ -1217,7 +1404,7 @@ export default function App(){
 
   // ── HOME ─────────────────────────────────────────────────
   function Home(){
-    const days=groupByDay(getAllSessions(data.muscles));
+    const days=groupByDay(getAllSessions(muscles));
     const PREVIEW=2;
     return (
       <div style={{minHeight:"100vh",display:"flex",flexDirection:"column"}}>
@@ -1225,7 +1412,7 @@ export default function App(){
           <button style={mnBtn} onClick={()=>setSidebar(true)}>☰</button>
           <div style={{flex:1,minWidth:0}}>
             <div style={ttl}>GymLog</div>
-            <div style={{...sub,fontSize:11,letterSpacing:1,color:"#555"}}>Push harder than yesterday 💪</div>
+            <div style={{...sub,fontSize:11,letterSpacing:1,color:"#555"}}>{activeUser?.name} · Push harder than yesterday 💪</div>
           </div>
           <button style={{...mnBtn,fontSize:18}} onClick={()=>setCalOpen(true)}>📅</button>
         </div>
@@ -1283,7 +1470,7 @@ export default function App(){
   }
 
   function DayDetail(){
-    const allDaySessions=getAllSessions(data.muscles).filter(s=>s.date===viewDay);
+    const allDaySessions=getAllSessions(muscles).filter(s=>s.date===viewDay);
     const [localSessions,setLocalSessions]=useState(allDaySessions);
     const [dragging,setDragging]=useState(null);
     const [dragOver,setDragOver]=useState(null);
@@ -1291,7 +1478,7 @@ export default function App(){
     const rowRefs=useRef([]);
     const dragState=useRef({active:false,idx:null});
 
-    useEffect(()=>setLocalSessions(getAllSessions(data.muscles).filter(s=>s.date===viewDay)),[data,viewDay]);
+    useEffect(()=>setLocalSessions(getAllSessions(muscles).filter(s=>s.date===viewDay)),[data,viewDay]);
 
     if(!localSessions.length||localSessions===undefined) return null;
 
@@ -1342,10 +1529,41 @@ export default function App(){
           <button style={bkBtn} onClick={()=>setScreen("home")}>← Back</button>
           <div style={{flex:1,minWidth:0}}>
             <div style={ttl}>{viewDay?fmtDate(viewDay):""}</div>
-            <div style={sub}>{localSessions.length} exercises</div>
+            <div style={sub}>{localSessions.length} exercise{localSessions.length!==1?"s":""}</div>
           </div>
         </div>
         <div ref={scrollRef} style={{flex:1,overflowY:"auto",paddingBottom:110}}>
+          {/* ── Body weight card — big, not draggable ── */}
+          {(()=>{
+            const bw=dailyWeights[viewDay];
+            const logged=bw!=null;
+            return(
+              <div style={{...crd,
+                borderColor:logged?"#1e3000":C.border,
+                background:logged?"#0d1400":C.card,
+              }}
+                onClick={()=>setModal({type:"dayWeight",date:viewDay})}
+                onMouseEnter={e=>e.currentTarget.style.borderColor=logged?"#2a4400":"#2a2a2a"}
+                onMouseLeave={e=>e.currentTarget.style.borderColor=logged?"#1e3000":C.border}>
+                <div style={{width:44,height:44,borderRadius:10,background:logged?"#1a2e00":"#131313",
+                  border:`1px solid ${logged?"#2a4400":"#1e1e1e"}`,
+                  display:"flex",alignItems:"center",justifyContent:"center",fontSize:22,flexShrink:0}}>
+                  🏋
+                </div>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontWeight:600,fontSize:14,color:logged?C.green:C.muted}}>Body Weight</div>
+                  <div style={{fontSize:11,color:logged?"#4a7a00":C.muted,marginTop:3}}>
+                    {logged?`${bw} kg — tap to edit`:"Optional · tap to log today's weight"}
+                  </div>
+                </div>
+                <span style={{color:logged?C.green:"#2a2a2a",fontSize:logged?15:18,fontWeight:700}}>
+                  {logged?"✓":"›"}
+                </span>
+              </div>
+            );
+          })()}
+          {/* ── Separator ── */}
+          <div style={{margin:"4px 14px 0",borderTop:"1px solid #161616",paddingTop:4}}/>
           {localSessions.length===0&&<div style={mpt}>No exercises logged<br/>Tap Add Exercise below</div>}
           <div onTouchMove={onTouchMove} onTouchEnd={onTouchEnd}>
             {localSessions.map((s,i)=>{
@@ -1524,11 +1742,13 @@ export default function App(){
       </div>
 
       {modal?.type==="addMuscle"&&<NameModal title="Add Muscle Group" ph="e.g. Glutes, Forearms…" onAdd={addMuscle}/>}
+      {modal?.type==="addUser"   &&<NameModal title="Add User" ph="e.g. Alex, Sarah…" onAdd={addUser}/>}
       {modal?.type==="addEx"    &&<NameModal title="Add Exercise" ph="e.g. Bench Press, Squat…" onAdd={n=>addEx(modal.mId,n)} checkDupe={n=>getMuscle(modal.mId)?.exercises.some(e=>e.name.trim().toLowerCase()===n.trim().toLowerCase())}/>}
       {modal?.type==="editEx"   &&<EditExModal mId={modal.mId} eId={modal.eId} current={modal.current}/>}
       {modal?.type==="addSet"   &&<SetModal mId={modal.mId} eId={modal.eId} sid={modal.sid}/>}
       {modal?.type==="editSet"  &&<EditSetModal mId={modal.mId} eId={modal.eId} sid={modal.sid} set={modal.set}/>}
       {modal?.type==="confirm"  &&<ConfirmModal msg={modal.msg} onOk={modal.onOk}/>}
+      {modal?.type==="dayWeight" &&<DayWeightModal date={modal.date}/>}
     </div>
   );
 }
