@@ -99,7 +99,7 @@ EOF
 
 log "Writing src/App.js (v3 — session-first flow + sidebar)..."
 cat > src/App.js << 'APPEOF'
-import { useState, useEffect, useRef, useCallback } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 
 // Storage: WebView localStorage, physical path on Android:
 // /data/data/com.gymlog.app/app_webview/Default/Local Storage/leveldb/
@@ -235,10 +235,12 @@ export default function App(){
   const [viewEx,  setViewEx]  = useState(null);
   const [wizard,  setWizard]  = useState(null);
   const [sidebar, setSidebar] = useState(false);
+  const [anatomyOpen, setAnatomyOpen] = useState(false);
   const [modal,   setModal]   = useState(null);
   const [sbOpen,  setSbOpen]  = useState({});
   const [calOpen, setCalOpen] = useState(false);  // calendar overlay
   const sideRef    = useRef(null);
+  const sideSwipeRef = useRef(null);
   const scrollRef  = useRef(null);  // main scroll container for screens
   const wScrollRef = useRef(null);  // wizard scroll container
   const fabVisible    = useScrollVisible(scrollRef);
@@ -274,12 +276,13 @@ export default function App(){
       }
     };
     go(); return ()=>h?.remove();
-  },[modal,sidebar,calOpen,wizard,screen,viewDay,viewEx]);
+  },[modal,sidebar,calOpen,anatomyOpen,wizard,screen,viewDay,viewEx]);
 
   function handleBack(){
     if(modal){setModal(null);return;}
     if(calOpen){setCalOpen(false);return;}
     if(sidebar){setSidebar(false);return;}
+    if(anatomyOpen){setAnatomyOpen(false);setScreen("home");return;}
     if(wizard){
       const {step}=wizard;
       if(step==="sets")     {setWizard(w=>({...w,step:"exercise"}));return;}
@@ -861,13 +864,18 @@ export default function App(){
     return <>
       <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.65)",zIndex:50}}/>
       <div ref={sideRef} style={{position:"fixed",top:0,left:0,bottom:0,width:"82%",maxWidth:340,
-        background:"#0f0f0f",borderRight:"1px solid #1e1e1e",zIndex:51,overflowY:"auto",display:"flex",flexDirection:"column",...T}}>
+        background:"#0f0f0f",borderRight:"1px solid #1e1e1e",zIndex:51,overflowY:"hidden",display:"flex",flexDirection:"column",...T}}
+        onTouchStart={e=>{const t=e.touches[0];sideSwipeRef.current={x:t.clientX,y:t.clientY};}}
+        onTouchEnd={e=>{const s=sideSwipeRef.current;if(!s)return;const dx=s.x-e.changedTouches[0].clientX;const dy=Math.abs(s.y-e.changedTouches[0].clientY);if(dx>50&&dy<60){setSidebar(false);}sideSwipeRef.current=null;}}>
 
         <div style={{padding:"44px 18px 14px",borderBottom:"1px solid #1a1a1a",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
           <div style={{fontSize:22,fontWeight:700,letterSpacing:3,textTransform:"uppercase",color:C.text}}>Muscles</div>
           <button style={{background:"none",border:"none",color:"#555",fontSize:26,cursor:"pointer",padding:"2px 10px",lineHeight:1}}
             onClick={()=>setSidebar(false)}>✕</button>
         </div>
+
+        {/* Scrollable content area */}
+        <div style={{flex:1,overflowY:"auto",display:"flex",flexDirection:"column"}}>
 
         {/* Search bar */}
         <div style={{padding:"10px 14px 10px",borderBottom:"1px solid #141414",background:"#0f0f0f",position:"sticky",top:0,zIndex:10}}
@@ -962,11 +970,17 @@ export default function App(){
           ))
         )}
 
-        <div style={{padding:"18px 18px 12px",marginTop:"auto"}}>
-          <button style={{...btn(true),display:"block",width:"100%",marginTop:4,fontSize:16,padding:"16px"}}
+        </div>{/* end scroll area */}
+
+        {/* Fixed bottom area */}
+        <div style={{flexShrink:0,borderTop:"1px solid #1a1a1a",background:"#0f0f0f",padding:"12px 18px 8px"}}>
+          <button style={{...btn(false),display:"block",width:"100%",fontSize:15,padding:"14px",
+            background:"#111",border:"1px solid #1e1e1e",color:"#c8f72c",borderRadius:8,fontWeight:700,letterSpacing:2,cursor:"pointer",...T}}
+            onMouseDown={e=>{e.stopPropagation();setAnatomyOpen(true);}}>🫀 Human Anatomy</button>
+          <button style={{...btn(true),display:"block",width:"100%",marginTop:8,fontSize:15,padding:"14px"}}
             onMouseDown={e=>{e.stopPropagation();setModal({type:"addMuscle"});}}>+ Add Muscle Group</button>
         </div>
-        <div style={{textAlign:"center",padding:"8px 20px 36px",fontSize:12,color:"#555",letterSpacing:2,...T,marginTop:"auto"}}>
+        <div style={{textAlign:"center",padding:"6px 20px 34px",fontSize:12,color:"#555",letterSpacing:2,...T,flexShrink:0,background:"#0f0f0f"}}>
           CREATED WITH ❤️ BY{" "}
           <a href="https://www.linkedin.com/in/prasadrpatil" target="_blank" rel="noreferrer"
             style={{color:C.green,textDecoration:"none",letterSpacing:2}}
@@ -974,6 +988,103 @@ export default function App(){
         </div>
       </div>
     </>;
+  }
+
+
+  // ── ANATOMY MODAL ─────────────────────────────────────────
+  function AnatomyModal(){
+
+
+    const [scale,setScale]=React.useState(1);
+    const [offset,setOffset]=React.useState({x:0,y:0});
+    const lastPinch=React.useRef(null);
+    const lastDrag=React.useRef(null);
+    const isDragging=React.useRef(false);
+    const imgRef=React.useRef(null);
+
+    function clampOffset(x,y,sc){
+      const el=imgRef.current;
+      if(!el) return {x,y};
+      const pw=el.parentElement.offsetWidth;
+      const ph=el.parentElement.offsetHeight;
+      const iw=el.offsetWidth*sc;
+      const ih=el.offsetHeight*sc;
+      const maxX=Math.max(0,(iw-pw)/2);
+      const maxY=Math.max(0,(ih-ph)/2);
+      return {x:Math.min(maxX,Math.max(-maxX,x)), y:Math.min(maxY,Math.max(-maxY,y))};
+    }
+
+    function onTouchStart(e){
+      if(e.touches.length===2){
+        const dx=e.touches[0].clientX-e.touches[1].clientX;
+        const dy=e.touches[0].clientY-e.touches[1].clientY;
+        lastPinch.current={dist:Math.hypot(dx,dy),scale,offset};
+        lastDrag.current=null;
+      } else if(e.touches.length===1){
+        lastDrag.current={x:e.touches[0].clientX,y:e.touches[0].clientY,ox:offset.x,oy:offset.y};
+        lastPinch.current=null;
+      }
+    }
+    function onTouchMove(e){
+      e.preventDefault();
+      if(e.touches.length===2&&lastPinch.current){
+        const dx=e.touches[0].clientX-e.touches[1].clientX;
+        const dy=e.touches[0].clientY-e.touches[1].clientY;
+        const dist=Math.hypot(dx,dy);
+        const newScale=Math.min(6,Math.max(1,lastPinch.current.scale*(dist/lastPinch.current.dist)));
+        const clamped=clampOffset(lastPinch.current.offset.x,lastPinch.current.offset.y,newScale);
+        setScale(newScale);
+        setOffset(clamped);
+      } else if(e.touches.length===1&&lastDrag.current&&scale>1){
+        const dx=e.touches[0].clientX-lastDrag.current.x;
+        const dy=e.touches[0].clientY-lastDrag.current.y;
+        setOffset(clampOffset(lastDrag.current.ox+dx,lastDrag.current.oy+dy,scale));
+      }
+    }
+    function onTouchEnd(e){
+      if(e.touches.length<2) lastPinch.current=null;
+      if(e.touches.length===0) lastDrag.current=null;
+    }
+    function onDblTap(){
+      if(scale>1){setScale(1);setOffset({x:0,y:0});}
+      else{setScale(2.5);setOffset({x:0,y:0});}
+    }
+    return(
+      <div style={{position:"fixed",inset:0,zIndex:200,background:"#000",display:"flex",flexDirection:"column"}}>
+        <div style={{padding:"44px 18px 12px 18px",display:"flex",alignItems:"center",justifyContent:"space-between",
+          background:"#0a0a0a",borderBottom:"1px solid #1a1a1a",flexShrink:0}}>
+          <div style={{display:"flex",alignItems:"center",gap:12}}>
+            <button style={{background:"none",border:"1px solid #2a2a2a",color:"#777",borderRadius:6,padding:"10px 14px",cursor:"pointer",fontSize:12,fontFamily:"inherit",letterSpacing:1,flexShrink:0}}
+              onClick={()=>{setAnatomyOpen(false);setScreen("home");}}>← Back</button>
+            <div>
+              <div style={{fontSize:16,fontWeight:700,letterSpacing:3,textTransform:"uppercase",color:"#e8e8e8"}}>Human Anatomy</div>
+              <div style={{fontSize:10,color:"#333",letterSpacing:2,marginTop:2}}>PINCH TO ZOOM · DOUBLE TAP TO RESET</div>
+            </div>
+          </div>
+        </div>
+        <div style={{flex:1,overflow:"hidden",position:"relative",display:"flex",alignItems:"center",justifyContent:"center",
+          touchAction:"none",userSelect:"none"}}
+          onTouchStart={onTouchStart}
+          onTouchMove={onTouchMove}
+          onTouchEnd={onTouchEnd}
+          onDoubleClick={onDblTap}>
+          <img ref={imgRef}
+            src={process.env.PUBLIC_URL+"/anatomy.png"}
+            alt="Human Anatomy"
+            style={{maxWidth:"100%",maxHeight:"100%",objectFit:"contain",
+              transform:"translate("+offset.x+"px,"+offset.y+"px) scale("+scale+")",
+              transformOrigin:"center center",
+              transition:lastPinch.current||lastDrag.current?"none":"transform 0.2s ease",
+              imageRendering:"crisp-edges",
+              display:"block"}}
+            draggable={false}
+          />
+        </div>
+        <div style={{textAlign:"center",padding:"8px",fontSize:10,color:"#222",background:"#0a0a0a",flexShrink:0}}>
+          {scale>1?"Drag to pan · Double tap to reset":"Pinch to zoom · Double tap to zoom in"}
+        </div>
+      </div>
+    );
   }
 
   // ── WIZARD ───────────────────────────────────────────────
@@ -1497,6 +1608,7 @@ export default function App(){
       `}</style>
 
       {sidebar&&<Sidebar/>}
+      {anatomyOpen&&<AnatomyModal/>}
       {calOpen&&<CalendarOverlay/>}
 
       <div style={{flex:1,overflow:"hidden",display:"flex",flexDirection:"column"}}>
