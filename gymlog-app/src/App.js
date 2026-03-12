@@ -1,9 +1,61 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
+import chestImg    from './assets/muscles/chest.png';
+import backImg     from './assets/muscles/back.png';
+import bicepsImg   from './assets/muscles/biceps.png';
+import tricepsImg  from './assets/muscles/triceps.png';
+import legsImg     from './assets/muscles/legs.png';
+import shouldersImg from './assets/muscles/shoulders.png';
+import absImg      from './assets/muscles/abs.png';
+
 
 // Storage: WebView localStorage, physical path on Android:
 // /data/data/com.gymlog.app/app_webview/Default/Local Storage/leveldb/
 // Access via Android Studio → View → Tool Windows → Device File Explorer
 const STORAGE_KEY = "gymlog/v5/data";
+
+// ── Constants ────────────────────────────────────────────────
+const C = {green:"#c8f72c",bg:"#0a0a0a",card:"#111",border:"#1a1a1a",text:"#e8e8e8",muted:"#484848",dim:"#2a2a2a",red:"#e8341a"};
+const T = {fontFamily:"'DM Mono','Courier New',monospace"};
+
+const MUSCLE_COLORS={
+  chest:"#e85d2a",back:"#2a7de8",legs:"#e8a22a",shoulders:"#9b2ae8",
+  arms:"#2ae8a2",core:"#e82a6a",glutes:"#e8d42a",calves:"#2ae8d4",
+  default:"#5a5a5a"
+};
+
+function getMuscleColor(name=""){
+  const n=name.toLowerCase();
+  if(n.includes("chest")||n.includes("pec")) return MUSCLE_COLORS.chest;
+  if(n.includes("back")||n.includes("lat")||n.includes("trap")) return MUSCLE_COLORS.back;
+  if(n.includes("leg")||n.includes("quad")||n.includes("hamstr")||n.includes("calf")||n.includes("calves")) return MUSCLE_COLORS.legs;
+  if(n.includes("shoulder")||n.includes("delt")) return MUSCLE_COLORS.shoulders;
+  if(n.includes("arm")||n.includes("bicep")||n.includes("tricep")||n.includes("forearm")) return MUSCLE_COLORS.arms;
+  if(n.includes("core")||n.includes("ab")||n.includes("oblique")) return MUSCLE_COLORS.core;
+  if(n.includes("glute")||n.includes("hip")) return MUSCLE_COLORS.glutes;
+  return MUSCLE_COLORS.default;
+}
+
+function uid(){ return Math.random().toString(36).slice(2,10)+Date.now().toString(36); }
+function fmtDate(iso){ return new Date(iso).toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric",year:"numeric"}); }
+
+const DEFAULT_MUSCLES=[
+  {id:"m1",name:"Chest",   exercises:[{id:"e1",name:"Bench Press"},{id:"e2",name:"Incline Press"},{id:"e3",name:"Cable Fly"}]},
+  {id:"m2",name:"Back",    exercises:[{id:"e4",name:"Pull-ups"},{id:"e5",name:"Barbell Row"},{id:"e6",name:"Lat Pulldown"}]},
+  {id:"m3",name:"Legs",    exercises:[{id:"e7",name:"Squat"},{id:"e8",name:"Leg Press"},{id:"e9",name:"Romanian Deadlift"}]},
+  {id:"m4",name:"Shoulders",exercises:[{id:"e10",name:"Overhead Press"},{id:"e11",name:"Lateral Raise"},{id:"e12",name:"Face Pull"}]},
+  {id:"m5",name:"Biceps",  exercises:[{id:"e13",name:"Barbell Curl"},{id:"e14",name:"Hammer Curl"}]},
+  {id:"m6",name:"Triceps", exercises:[{id:"e15",name:"Tricep Pushdown"},{id:"e16",name:"Skull Crusher"}]},
+  {id:"m7",name:"Abs",     exercises:[{id:"e17",name:"Plank"},{id:"e18",name:"Cable Crunch"}]},
+].map(m=>({...m,lastEdited:Date.now(),exercises:m.exercises.map(e=>({...e,sessions:[]}))}));
+
+function initData(){
+  try{
+    const raw=localStorage.getItem("gymlog/v5/data");
+    if(raw){ const d=JSON.parse(raw); if(d?.users?.length) return d; }
+  }catch{}
+  const u=makeDefaultUser("Me");
+  return {users:[u],activeUserId:u.id};
+}
 
 // ── Default first user ───────────────────────────────────────
 function makeDefaultUser(name="Me"){
@@ -11,110 +63,61 @@ function makeDefaultUser(name="Me"){
 }
 function uid0(){ return Math.random().toString(36).slice(2,10)+Date.now().toString(36); }
 
-// ── Anatomical icons ────────────────────────────────────────
-const MuscleIcon = ({ muscle, size = 48 }) => {
-  const G="#4a4a4a", D="#333", R="#e8341a", S="#c42a12";
-  const Base = ({children}) => (
-    <svg viewBox="0 0 64 80" width={size} height={size}>
-      <ellipse cx="32" cy="7" rx="5" ry="6" fill={G}/>
-      <rect x="29" y="12" width="6" height="5" fill={G}/>
-      {children}
-      <path d="M14 17 Q8 20 8 32 L10 44 Q12 46 14 44 L16 32 Z" fill={G}/>
-      <path d="M50 17 Q56 20 56 32 L54 44 Q52 46 50 44 L48 32 Z" fill={G}/>
-      <path d="M14 54 L20 54 L22 72 L18 72 Z" fill={G}/>
-      <path d="M44 54 L50 54 L46 72 L42 72 Z" fill={G}/>
-      <path d="M26 54 L32 54 L32 72 L26 72 Z" fill={G}/>
-      <path d="M32 54 L38 54 L38 72 L32 72 Z" fill={G}/>
-    </svg>
-  );
-  const torso = <path d="M18 17 Q14 20 14 30 L14 54 L50 54 L50 30 Q50 20 46 17Z" fill={D}/>;
-  const icons = {
-    Chest:    <Base>{torso}<path d="M18 17 Q14 20 14 32 L32 30Z" fill={R}/><path d="M46 17 Q50 20 50 32 L32 30Z" fill={R}/><line x1="32" y1="17" x2="32" y2="32" stroke={S} strokeWidth="1"/></Base>,
-    Back:     <Base>{torso}<path d="M22 17 Q32 13 42 17 Q38 24 32 22 Q26 24 22 17Z" fill={R}/><path d="M14 20 Q14 38 20 42 L28 38 L24 20Z" fill={R}/><path d="M50 20 Q50 38 44 42 L36 38 L40 20Z" fill={R}/></Base>,
-    Legs:     <Base>{torso}<path d="M14 54 L20 54 L22 72 L18 72Z" fill={R}/><path d="M44 54 L50 54 L46 72 L42 72Z" fill={R}/><path d="M26 54 L32 54 L32 72 L26 72Z" fill={R} opacity="0.8"/><path d="M32 54 L38 54 L38 72 L32 72Z" fill={R} opacity="0.8"/></Base>,
-    Shoulders:<Base>{torso}<path d="M14 17 Q8 20 8 32 L10 44 Q12 46 14 44 L16 32Z" fill={R}/><path d="M50 17 Q56 20 56 32 L54 44 Q52 46 50 44 L48 32Z" fill={R}/><path d="M22 17 Q32 13 42 17 L44 22 Q32 19 20 22Z" fill={R}/></Base>,
-    Biceps:   <Base>{torso}<path d="M14 17 Q8 20 8 32 L10 44 Q12 46 14 44 L16 32Z" fill={G}/><ellipse cx="11" cy="28" rx="4" ry="7" fill={R}/><path d="M50 17 Q56 20 56 32 L54 44 Q52 46 50 44 L48 32Z" fill={G}/><ellipse cx="53" cy="28" rx="4" ry="7" fill={R}/></Base>,
-    Triceps:  <Base>{torso}<path d="M14 17 Q8 20 8 32 L10 44 Q12 46 14 44 L16 32Z" fill={G}/><path d="M8 22 Q5 30 8 38 Q12 42 15 38 Q13 30 13 22Z" fill={R}/><path d="M50 17 Q56 20 56 32 L54 44 Q52 46 50 44 L48 32Z" fill={G}/><path d="M56 22 Q59 30 56 38 Q52 42 49 38 Q51 30 51 22Z" fill={R}/></Base>,
-    Abs:      <Base>{torso}<rect x="25" y="28" width="6" height="5" rx="1.5" fill={R}/><rect x="33" y="28" width="6" height="5" rx="1.5" fill={R}/><rect x="25" y="35" width="6" height="5" rx="1.5" fill={R}/><rect x="33" y="35" width="6" height="5" rx="1.5" fill={R}/><rect x="25" y="42" width="6" height="4" rx="1.5" fill={R} opacity="0.8"/><rect x="33" y="42" width="6" height="4" rx="1.5" fill={R} opacity="0.8"/><line x1="32" y1="26" x2="32" y2="48" stroke={S} strokeWidth="1"/></Base>,
-  };
-  return icons[muscle] || <Base>{torso}<ellipse cx="32" cy="34" rx="8" ry="10" fill={R} opacity="0.7"/></Base>;
+// ── Muscle icons ────────────────────────────────────────────
+// Images live at: gymlog-app/src/assets/muscles/
+// chest.png | back.png | biceps.png | triceps.png
+// legs.png  | shoulders.png | abs.png
+const MUSCLE_IMGS = {
+  Chest:     chestImg,
+  Back:      backImg,
+  Biceps:    bicepsImg,
+  Triceps:   tricepsImg,
+  Legs:      legsImg,
+  Shoulders: shouldersImg,
+  Abs:       absImg,
 };
 
-// ── Default data ─────────────────────────────────────────────
-const DEFAULT_MUSCLES = [
-  { id:"m1", name:"Chest", lastEdited:1000, exercises:[
-    "Barbell Bench Press","Incline Barbell Bench Press","Decline Barbell Bench Press",
-    "Reverse Grip Bench Press","Close Grip Bench Press","Dumbbell Bench Press",
-    "Incline Dumbbell Press","Decline Dumbbell Press","Dumbbell Fly","Incline Dumbbell Fly",
-    "Decline Dumbbell Fly","Dumbbell Pullover","Smith Machine Bench Press",
-    "Smith Machine Incline Press","Smith Machine Decline Press","Cable Fly (High to Low)",
-    "Cable Fly (Low to High)","Cable Fly (Mid)","Pec Deck Machine","Chest Press Machine",
-    "Plate Loaded Chest Press","Push-ups","Wide Push-ups","Decline Push-ups","Weighted Push-ups","Chest Dips"
-  ].map((name,i)=>({id:`e1_${i}`,name,sessions:[],lastEdited:1000+i}))},
-  { id:"m2", name:"Back", lastEdited:999, exercises:[
-    "Deadlift","Romanian Deadlift","Stiff Leg Deadlift","Barbell Row","Pendlay Row",
-    "Rack Pull","Meadows Row","Single Arm Dumbbell Row","Dumbbell Row","Incline Bench Dumbbell Row",
-    "Smith Machine Row","Lat Pulldown","Wide Grip Pulldown","Close Grip Pulldown",
-    "Reverse Grip Pulldown","Seated Cable Row","Straight Arm Pulldown","Face Pull",
-    "Pull-ups","Weighted Pull-ups","Chin-ups"
-  ].map((name,i)=>({id:`e2_${i}`,name,sessions:[],lastEdited:999+i}))},
-  { id:"m3", name:"Legs", lastEdited:998, exercises:[
-    "Barbell Squat","Front Squat","Romanian Deadlift","Stiff Leg Deadlift","Good Mornings",
-    "Barbell Hip Thrust","Dumbbell Squat","Goblet Squat","Walking Lunges","Reverse Lunges",
-    "Bulgarian Split Squat","Step Ups","Smith Machine Squat","Smith Machine Lunges",
-    "Smith Machine Hip Thrust","Leg Press","Hack Squat","Leg Extension",
-    "Leg Curl (Lying)","Leg Curl (Seated)","Standing Calf Raise","Seated Calf Raise",
-    "Leg Press Calf Raise","Donkey Calf Raise"
-  ].map((name,i)=>({id:`e3_${i}`,name,sessions:[],lastEdited:998+i}))},
-  { id:"m4", name:"Shoulders", lastEdited:997, exercises:[
-    "Barbell Overhead Press","Seated Barbell Press","Push Press","Behind the Neck Press",
-    "Upright Row","Dumbbell Shoulder Press","Arnold Press","Dumbbell Lateral Raise",
-    "Dumbbell Front Raise","Rear Delt Fly","Dumbbell Shrugs","Smith Machine Shoulder Press",
-    "Smith Machine Upright Row","Smith Machine Shrugs","Cable Lateral Raise","Cable Front Raise",
-    "Cable Rear Delt Fly","Machine Shoulder Press","Machine Lateral Raise","Reverse Pec Deck"
-  ].map((name,i)=>({id:`e4_${i}`,name,sessions:[],lastEdited:997+i}))},
-  { id:"m5", name:"Biceps", lastEdited:996, exercises:[
-    "Barbell Curl","EZ Bar Curl","Reverse Curl","Alternating Dumbbell Curl","Hammer Curl",
-    "Incline Dumbbell Curl","Concentration Curl","Zottman Curl","Cable Curl","Rope Cable Curl",
-    "Preacher Curl Machine","Cable Single Arm Curl"
-  ].map((name,i)=>({id:`e5_${i}`,name,sessions:[],lastEdited:996+i}))},
-  { id:"m6", name:"Triceps", lastEdited:995, exercises:[
-    "Skull Crushers","JM Press","Overhead Dumbbell Extension","Seated Overhead Extension",
-    "Dumbbell Skull Crushers","Tricep Kickbacks","Cable Pushdown","Rope Pushdown",
-    "Reverse Grip Pushdown","Cable Overhead Extension","Single Arm Pushdown",
-    "Bench Dips","Parallel Bar Dips","Weighted Dips"
-  ].map((name,i)=>({id:`e6_${i}`,name,sessions:[],lastEdited:995+i}))},
-  { id:"m7", name:"Abs", lastEdited:994, exercises:[
-    "Crunches","Weighted Crunch","Cable Crunch","Decline Sit-ups","Hanging Leg Raise",
-    "Hanging Knee Raise","Reverse Crunch","Russian Twist","Weighted Russian Twist",
-    "Plank","Side Plank","Ab Wheel Rollout","V-Ups","Toe Touches","Mountain Climbers"
-  ].map((name,i)=>({id:`e7_${i}`,name,sessions:[],lastEdited:994+i}))},
-];
-
-function uid(){ return Math.random().toString(36).slice(2,10)+Date.now().toString(36); }
-function fmtDate(iso){ return new Date(iso).toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric",year:"numeric"}); }
-function initData(){
-  try{
-    const s=localStorage.getItem(STORAGE_KEY);
-    if(s){
-      const d=JSON.parse(s);
-      // migrate old format (has muscles at top level)
-      if(d.muscles&&!d.users){
-        const u={id:uid(),name:"Me",muscles:d.muscles};
-        return {users:[u],activeUserId:u.id};
-      }
-      return d;
-    }
-  }catch{}
-  const u=makeDefaultUser("Me");
-  return {users:[u],activeUserId:u.id};
-}
-
+const MuscleIcon = ({ muscle, size = 48, showColor = false }) => {
+  const src = MUSCLE_IMGS[muscle];
+  const color = getMuscleColor(muscle||"");
+  if (!src) {
+    // fallback circle for unknown muscles
+    return (
+      <div style={{
+        width:size, height:size, borderRadius:'50%', flexShrink:0,
+        background: showColor ? color+"33" : "#1e1e1e",
+        border: `2px solid ${showColor ? color : "#2a2a2a"}`,
+        display:'flex', alignItems:'center', justifyContent:'center',
+        fontSize: size*0.35, color: showColor ? color : "#484848"
+      }}>?</div>
+    );
+  }
+  return (
+    <div style={{position:'relative', width:size, height:size, flexShrink:0}}>
+      <img
+        src={src}
+        width={size}
+        height={size}
+        style={{objectFit:'contain', display:'block'}}
+        alt={muscle}
+      />
+      {showColor && (
+        <div style={{
+          position:'absolute', bottom:0, left:'50%',
+          transform:'translateX(-50%)',
+          width:size*0.5, height:3, borderRadius:2,
+          background:color, opacity:0.9
+        }}/>
+      )}
+    </div>
+  );
+};
 function getAllSessions(muscles){
   const out=[];
-  muscles.forEach(m=>m.exercises.forEach(e=>e.sessions.forEach(s=>
-    out.push({...s,mId:m.id,mName:m.name,eName:e.name,eId:e.id})
-  )));
+  muscles.forEach(m=>m.exercises.forEach(e=>e.sessions.forEach(s=>{
+    if(!s.sets||s.sets.length===0) return; // skip empty sessions
+    out.push({...s,mId:m.id,mName:m.name,eName:e.name,eId:e.id});
+  })));
   return out.sort((a,b)=>{
     const dateDiff=new Date(b.date)-new Date(a.date);
     if(dateDiff!==0) return dateDiff;
@@ -159,6 +162,7 @@ export default function App(){
   const [modal,   setModal]   = useState(null);
   const [sbOpen,  setSbOpen]  = useState({});
   const [calOpen, setCalOpen] = useState(false);  // calendar overlay
+  const [expandedDay, setExpandedDay] = useState(null); // sid of inline-expanded exercise
   const sideRef    = useRef(null);
   const sideSwipeRef = useRef(null);
   const scrollRef  = useRef(null);  // main scroll container for screens
@@ -201,6 +205,7 @@ export default function App(){
   },[sidebar]);
 
   const capApp   = useRef(null);   // Capacitor App plugin ref for minimizeApp
+  const timerMap = useRef({});     // sid -> {running,elapsed,start} — memory only, never persisted
   const prevScreen = useRef("home"); // track where ExerciseDetail was opened from
 
   // Capacitor back button
@@ -228,7 +233,13 @@ export default function App(){
     if(anatomyOpen){setAnatomyOpen(false);setScreen("home");return;}
     if(wizard){
       const {step}=wizard;
-      if(step==="sets")        {setWizard(w=>({...w,step:"exercise"}));return;}
+      if(step==="sets"){
+        // Delete session if empty before going back
+        if(wizard?.sid&&!getSess(wizard.mId,wizard.eId,wizard.sid)?.sets?.length){
+          delSession(wizard.mId,wizard.eId,wizard.sid);
+        }
+        setWizard(w=>({...w,step:"exercise",sid:null}));return;
+      }
       if(step==="exercise")    {setWizard(w=>({...w,step:"muscle",eId:null,sid:null}));return;}
       setWizard(null); return;
     }
@@ -298,6 +309,35 @@ export default function App(){
     ? {...u, dailyWeights:{...(u.dailyWeights||{}), [date]: kg==null?undefined:kg}}
     : u
   )}));
+  const dailySteps = activeUser?.dailySteps || {};
+  const setDaySteps = (date, steps) => setData(d=>({...d,users:d.users.map(u=>u.id===activeUser.id
+    ? {...u, dailySteps:{...(u.dailySteps||{}), [date]: steps==null?undefined:steps}}
+    : u
+  )}));
+
+  // ── Week stats + streak ─────────────────────────────────
+  const todayStr = new Date().toISOString().slice(0,10);
+  const allSess  = getAllSessions(muscles);
+  const weekStart= (()=>{ const d=new Date(); d.setDate(d.getDate()-d.getDay()); return d.toISOString().slice(0,10); })();
+  const weekExSessions = allSess.filter(s=>s.date>=weekStart&&s.date<=todayStr);
+  const weekSessions = new Set(weekExSessions.map(s=>s.date)).size; // unique training days
+  const weekTotalEx = weekExSessions.length; // total exercises across all days
+  const streak = (()=>{
+    const days=[...new Set(allSess.map(s=>s.date))].sort().reverse();
+    if(!days.length) return 0;
+    let count=0; let cur=new Date(todayStr);
+    for(const d of days){
+      let diff=Math.round((cur-new Date(d))/(1000*60*60*24));
+      // Skip Sundays: if the gap is exactly 2 and the skipped day is a Sunday, treat as 1
+      if(diff===2){
+        const skipped=new Date(cur); skipped.setDate(skipped.getDate()-1);
+        if(skipped.getDay()===0) diff=1; // Sunday in the gap — forgive it
+      }
+      if(diff>1) break;
+      if(diff===0||diff===1){ count++; cur=new Date(d); }
+    }
+    return count;
+  })();
 
   // ── Design tokens ────────────────────────────────────────
   const C={green:"#c8f72c",bg:"#0a0a0a",card:"#111",border:"#1a1a1a",text:"#e8e8e8",muted:"#484848",dim:"#2a2a2a",red:"#e8341a"};
@@ -641,21 +681,45 @@ export default function App(){
       <div style={mTtl}>{existing!=null?"Edit Body Weight":"Log Body Weight"}</div>
       <div style={{fontSize:11,color:"#444",letterSpacing:1,marginBottom:12}}>{fmtDate(date)}</div>
       <div style={{position:"relative",marginBottom:14}}>
-        <input
-          type="number"
-          autoFocus
+        <input type="number" autoFocus
           style={{...inp,marginBottom:0,paddingRight:44,fontSize:22,textAlign:"center",color:C.green,fontWeight:700}}
-          placeholder="0.0"
-          value={val}
+          placeholder="0.0" value={val}
           onChange={e=>setVal(e.target.value)}
-          onKeyDown={e=>{ if(e.key==="Enter") doSave(); }}
-        />
+          onKeyDown={e=>{ if(e.key==="Enter") doSave(); }}/>
         <span style={{position:"absolute",right:14,top:"50%",transform:"translateY(-50%)",fontSize:13,color:"#555",...T}}>kg</span>
       </div>
       <div style={rw}>
         {existing!=null&&<button style={{...btn(false,true),flex:"0 0 auto",padding:"14px 18px",fontSize:11}} onMouseDown={e=>{e.stopPropagation();doClear();}}>Clear</button>}
         <button style={btn()} onMouseDown={e=>{e.stopPropagation();setModal(null);}}>Cancel</button>
         <button style={btn(true,!val)} onMouseDown={e=>{e.stopPropagation();doSave();}}>Save</button>
+      </div>
+    </Wrap>;
+  }
+
+  function DayStepsModal({date}){
+    const existing = dailySteps[date];
+    const [val,setVal] = useState(existing!=null?String(existing):"");
+    const doSave = () => {
+      const s = parseInt(val);
+      if(!isNaN(s)&&s>=0){ setDaySteps(date,s); }
+      setModal(null);
+    };
+    const doClear = () => { setDaySteps(date,null); setModal(null); };
+    return <Wrap>
+      <div style={mTtl}>{existing!=null?"Edit Steps":"Log Steps"}</div>
+      <div style={{fontSize:11,color:"#444",letterSpacing:1,marginBottom:12}}>{fmtDate(date)}</div>
+      <div style={{position:"relative",marginBottom:14}}>
+        <input type="number" autoFocus
+          style={{...inp,marginBottom:0,paddingRight:56,fontSize:22,textAlign:"center",color:"#5bc8f5",fontWeight:700}}
+          placeholder="0" value={val}
+          onChange={e=>setVal(e.target.value)}
+          onKeyDown={e=>{ if(e.key==="Enter") doSave(); }}/>
+        <span style={{position:"absolute",right:14,top:"50%",transform:"translateY(-50%)",fontSize:11,color:"#555",...T}}>steps</span>
+      </div>
+      <div style={rw}>
+        {existing!=null&&<button style={{...btn(false,true),flex:"0 0 auto",padding:"14px 18px",fontSize:11}} onMouseDown={e=>{e.stopPropagation();doClear();}}>Clear</button>}
+        <button style={btn()} onMouseDown={e=>{e.stopPropagation();setModal(null);}}>Cancel</button>
+        <button style={{...btn(true,!val),background:val?"#003a4a":"",color:val?"#5bc8f5":""}} onMouseDown={e=>{e.stopPropagation();doSave();}}>Save</button>
       </div>
     </Wrap>;
   }
@@ -754,6 +818,15 @@ export default function App(){
                   {s.note&&<div style={{fontSize:11,color:"#385016",marginTop:2,fontStyle:"italic"}}>"{s.note}"</div>}
                 </div>
                 {type!=="super"&&s.weight!=null&&<span style={{fontSize:11,color:"#243810",flexShrink:0}}>{Math.round(s.weight*s.reps)}kg</span>}
+                <button
+                  style={{background:"#0d1400",border:"1px solid #1e3000",color:"#6a9a00",
+                    borderRadius:6,padding:"4px 9px",fontSize:11,fontWeight:700,cursor:"pointer",
+                    flexShrink:0,lineHeight:1,...T,letterSpacing:0.5}}
+                  onMouseDown={e=>e.stopPropagation()}
+                  title="Duplicate set"
+                  onClick={()=>addSet(mId,eId,sid,{weight:s.weight,reps:s.reps,type:s.type||"normal",note:s.note||"",dropSets:s.dropSets||[],superSets:s.superSets||[]})}
+                  onMouseEnter={e=>{e.currentTarget.style.background="#141e00";e.currentTarget.style.color=C.green;}}
+                  onMouseLeave={e=>{e.currentTarget.style.background="#0d1400";e.currentTarget.style.color="#6a9a00";}}>⎘</button>
                 <button style={{...dBtn,fontSize:14,color:"#2a2a2a",padding:"4px 8px"}}
                   onMouseDown={e=>e.stopPropagation()}
                   onClick={()=>setModal({type:"editSet",mId,eId,sid,set:s})}
@@ -825,7 +898,7 @@ export default function App(){
     const [sbSearch,setSbSearch]=useState("");
     const [renamingUid,setRenamingUid]=useState(null);
     const [renameVal,setRenameVal]=useState("");
-    const [usersOpen,setUsersOpen]=useState(true);
+    const [usersOpen,setUsersOpen]=useState(false);
     const [exercisesOpen,setExercisesOpen]=useState(true);
     const trimmed=sbSearch.trim().toLowerCase();
 
@@ -1146,67 +1219,125 @@ export default function App(){
     const [exSearch,setExSearch]=useState("");
     const fabVisible=wizFabVisible;
 
-    if(step==="muscle") return (
-      <div style={{minHeight:"100vh",display:"flex",flexDirection:"column"}}>
-        <div style={hdr}>
-          <button style={bkBtn} onClick={()=>setWizard(null)}>✕</button>
-          <div style={{flex:1,minWidth:0}}>
-            <div style={ttl}>Record Session</div>
-            <div style={sub}>Pick a muscle group</div>
-          </div>
-        </div>
-        <div ref={wScrollRef} style={{flex:1,overflowY:"auto",paddingBottom:100}}>
-          {/* ── Body weight card — once per day, optional ── */}
-          {(()=>{
-            const bw = dailyWeights[date];
-            const logged = bw!=null;
-            return (
-              <div style={{...crd,
-                borderColor: logged?"#1e3000":C.border,
-                background: logged?"#0d1400":C.card,
-                opacity: logged?1:0.7,
-              }}
-                onClick={()=>setModal({type:"dayWeight",date})}
-                onMouseEnter={e=>e.currentTarget.style.borderColor=logged?"#2a4400":"#2a2a2a"}
-                onMouseLeave={e=>e.currentTarget.style.borderColor=logged?"#1e3000":C.border}>
-                <div style={{width:44,height:44,borderRadius:10,background:logged?"#1a2e00":"#131313",
-                  border:`1px solid ${logged?"#2a4400":"#1e1e1e"}`,
-                  display:"flex",alignItems:"center",justifyContent:"center",fontSize:22,flexShrink:0}}>
-                  🏋
-                </div>
-                <div style={{flex:1,minWidth:0}}>
-                  <div style={{fontWeight:600,fontSize:14,color:logged?C.green:C.muted}}>
-                    Body Weight
-                  </div>
-                  <div style={{fontSize:11,color:logged?"#4a7a00":C.muted,marginTop:3}}>
-                    {logged?`${bw} kg — tap to edit`:"Optional · tap to log today's weight"}
-                  </div>
-                </div>
-                <span style={{color:logged?C.green:"#2a2a2a",fontSize:logged?15:18,fontWeight:700}}>
-                  {logged?"✓":"›"}
-                </span>
-              </div>
-            );
-          })()}
-          {/* ── Separator ── */}
-          <div style={{margin:"4px 14px 0",borderTop:"1px solid #161616",paddingTop:4}}/>
-          {muscles.map(m=>(
-            <div key={m.id} style={crd}
-              onClick={()=>setWizard({step:"exercise",date,mId:m.id})}
-              onMouseEnter={e=>e.currentTarget.style.borderColor="#2a2a2a"}
-              onMouseLeave={e=>e.currentTarget.style.borderColor=C.border}>
-              <MuscleIcon muscle={m.name} size={44}/>
-              <div style={{flex:1,minWidth:0}}>
-                <div style={{fontWeight:600,fontSize:14}}>{m.name}</div>
-                <div style={{fontSize:11,color:C.muted,marginTop:3}}>{m.exercises.length} exercises</div>
-              </div>
-              <span style={{color:"#3a3a3a",fontSize:18}}>›</span>
+    if(step==="muscle") {
+      const globalSearch = exSearch.trim();
+      const globalResults = globalSearch
+        ? muscles.flatMap(m=>
+            m.exercises
+              .filter(e=>e.name.toLowerCase().includes(globalSearch.toLowerCase()))
+              .map(e=>({...e,mId:m.id,mName:m.name}))
+          )
+        : null;
+
+      const hiGlobal=(name)=>{
+        if(!globalSearch) return name;
+        const idx=name.toLowerCase().indexOf(globalSearch.toLowerCase());
+        if(idx<0) return name;
+        return <>{name.slice(0,idx)}<span style={{color:C.green,fontWeight:700}}>{name.slice(idx,idx+globalSearch.length)}</span>{name.slice(idx+globalSearch.length)}</>;
+      };
+
+      return (
+        <div style={{minHeight:"100vh",display:"flex",flexDirection:"column"}}>
+          <div style={hdr}>
+            <button style={bkBtn} onClick={()=>setWizard(null)}>✕</button>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={ttl}>Record Session</div>
+              <div style={sub}>{globalSearch?"Search results":"Pick a muscle group"}</div>
             </div>
-          ))}
+          </div>
+          <div ref={wScrollRef} style={{flex:1,overflowY:"auto",paddingBottom:100}}>
+            {/* ── Body weight + Steps — two side-by-side buttons ── */}
+            {(()=>{
+              const bw=dailyWeights[date]; const st=dailySteps[date];
+              const btnBase={flex:1,display:"flex",flexDirection:"column",alignItems:"center",gap:4,
+                padding:"10px 8px",borderRadius:10,cursor:"pointer",border:"1px solid",transition:"border-color 0.15s"};
+              return(
+                <div style={{display:"flex",gap:8,padding:"10px 14px 4px"}}>
+                  <div style={{...btnBase,background:bw!=null?"#0d1400":C.card,borderColor:bw!=null?"#1e3000":C.border}}
+                    onClick={()=>setModal({type:"dayWeight",date})}
+                    onMouseEnter={e=>e.currentTarget.style.borderColor=bw!=null?"#2a4400":"#2a2a2a"}
+                    onMouseLeave={e=>e.currentTarget.style.borderColor=bw!=null?"#1e3000":C.border}>
+                    <span style={{fontSize:18}}>🏋</span>
+                    <div style={{fontSize:10,fontWeight:700,color:bw!=null?C.green:C.muted,letterSpacing:0.5}}>Body Weight</div>
+                    <div style={{fontSize:11,color:bw!=null?"#4a7a00":"#2a2a2a",fontWeight:bw!=null?700:400}}>
+                      {bw!=null?`${bw} kg`:"— kg"}
+                    </div>
+                  </div>
+                  <div style={{...btnBase,background:st!=null?"#00141e":C.card,borderColor:st!=null?"#003a4a":C.border}}
+                    onClick={()=>setModal({type:"daySteps",date})}
+                    onMouseEnter={e=>e.currentTarget.style.borderColor=st!=null?"#005a70":"#2a2a2a"}
+                    onMouseLeave={e=>e.currentTarget.style.borderColor=st!=null?"#003a4a":C.border}>
+                    <span style={{fontSize:18}}>👟</span>
+                    <div style={{fontSize:10,fontWeight:700,color:st!=null?"#5bc8f5":C.muted,letterSpacing:0.5}}>Steps</div>
+                    <div style={{fontSize:11,color:st!=null?"#2a7a9a":"#2a2a2a",fontWeight:st!=null?700:400}}>
+                      {st!=null?(st>=1000?`${(st/1000).toFixed(1)}k`:`${st}`):"— steps"}
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
+            {/* ── Global exercise search bar ── */}
+            <div style={{padding:"8px 14px 8px",borderBottom:"1px solid #141414"}}>
+              <div style={{position:"relative",display:"flex",alignItems:"center"}}>
+                <span style={{position:"absolute",left:13,fontSize:14,color:"#3a3a3a",pointerEvents:"none"}}>⌕</span>
+                <input
+                  style={{...inp,marginBottom:0,paddingLeft:36,background:"#0f0f0f",border:"1px solid #1e1e1e"}}
+                  placeholder="Search all exercises…"
+                  value={exSearch}
+                  onChange={e=>setExSearch(e.target.value)}
+                />
+                {exSearch&&<button
+                  style={{position:"absolute",right:10,background:"none",border:"none",color:"#555",cursor:"pointer",fontSize:16,padding:"4px",lineHeight:1}}
+                  onMouseDown={e=>{e.preventDefault();setExSearch("");}}>✕</button>}
+              </div>
+            </div>
+            {/* ── Search results OR muscle list ── */}
+            {globalResults ? (
+              <>
+                {globalResults.length===0
+                  ? <div style={mpt}>No exercises match<br/>"{exSearch}"</div>
+                  : globalResults.map(e=>{
+                      const last=sortSess(e.sessions)[0];
+                      const maxW=last?.sets.filter(s=>s.weight!=null).length?Math.max(...last.sets.filter(s=>s.weight!=null).map(s=>s.weight)):0;
+                      return(
+                        <div key={e.id} style={crd}
+                          onClick={()=>{ const ns=addSession(e.mId,e.id,date); setWizard(w=>({...w,step:"sets",mId:e.mId,eId:e.id,sid:ns})); setExSearch(""); }}
+                          onMouseEnter={el=>el.currentTarget.style.borderColor="#2a2a2a"}
+                          onMouseLeave={el=>el.currentTarget.style.borderColor=C.border}>
+                          <MuscleIcon muscle={e.mName} size={44}/>
+                          <div style={{flex:1,minWidth:0}}>
+                            <div style={{fontWeight:600,fontSize:14}}>{hiGlobal(e.name)}</div>
+                            <div style={{fontSize:11,color:C.muted,marginTop:3}}>{e.mName}{maxW>0?` · Last max: ${maxW}kg`:""}</div>
+                          </div>
+                          <span style={{color:"#3a3a3a",fontSize:18}}>›</span>
+                        </div>
+                      );
+                    })
+                }
+              </>
+            ) : (
+              <>
+                <div style={{margin:"4px 14px 0",borderTop:"1px solid #161616",paddingTop:4}}/>
+                {muscles.map(m=>(
+                  <div key={m.id} style={crd}
+                    onClick={()=>setWizard({step:"exercise",date,mId:m.id})}
+                    onMouseEnter={e=>e.currentTarget.style.borderColor="#2a2a2a"}
+                    onMouseLeave={e=>e.currentTarget.style.borderColor=C.border}>
+                    <MuscleIcon muscle={m.name} size={44}/>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{fontWeight:600,fontSize:14}}>{m.name}</div>
+                      <div style={{fontSize:11,color:C.muted,marginTop:3}}>{m.exercises.length} exercises</div>
+                    </div>
+                    <span style={{color:"#3a3a3a",fontSize:18}}>›</span>
+                  </div>
+                ))}
+              </>
+            )}
+          </div>
+          <FloatBtn label="✕  Cancel" onClick={()=>setWizard(null)} visible={fabVisible}/>
         </div>
-        <FloatBtn label="✕  Cancel" onClick={()=>setWizard(null)} visible={fabVisible}/>
-      </div>
-    );
+      );
+    }
 
     if(step==="exercise"&&muscle) {
       const filtered = sortEx(muscle.exercises).filter(e=>
@@ -1229,7 +1360,6 @@ export default function App(){
                 style={{...inp,marginBottom:0,paddingLeft:36,background:"#0f0f0f",border:"1px solid #1e1e1e"}}
                 placeholder="Search exercises…"
                 value={exSearch}
-                autoFocus
                 onChange={e=>setExSearch(e.target.value)}
               />
               {exSearch&&<button
@@ -1270,40 +1400,151 @@ export default function App(){
 
     if(step==="sets"&&session){
       return (
-        <div style={{minHeight:"100vh",display:"flex",flexDirection:"column"}}>
-          <div style={hdr}>
-            <button style={bkBtn} onClick={()=>setWizard(w=>({...w,step:"exercise",sid:null}))}>← Back</button>
-            <div style={{flex:1,minWidth:0}}>
-              <div style={ttl}>{exer?.name}</div>
-              <div style={sub}>{muscle?.name} · {fmtDate(date)}</div>
-            </div>
-          </div>
-          <StatsBar sets={session.sets}/>
-          <div ref={wScrollRef} style={{flex:1,overflowY:"auto",paddingBottom:110}}>
-            <div style={{padding:"10px 14px"}}>
-              {!editNote
-                ?<div style={nBox} onClick={()=>{setEN(true);setNV(session.note);}}>
-                  {session.note||<span style={{color:"#1c1c1c"}}>+ Add session note…</span>}
-                </div>
-                :<input style={{...inp,marginBottom:0}} autoFocus value={noteVal}
-                  onChange={e=>setNV(e.target.value)}
-                  onBlur={()=>{updateNote(mId,eId,sid,noteVal);setEN(false);}}
-                  onKeyDown={e=>{if(e.key==="Enter"){updateNote(mId,eId,sid,noteVal);setEN(false);}}}/>
-              }
-            </div>
-            <div style={sLbl}>Sets</div>
-            <SetList sets={session.sets} mId={mId} eId={eId} sid={sid}/>
-          </div>
-          {/* Log Set on left, Done on right */}
-          <FloatBtn label="+ Log Set" onClick={()=>setModal({type:"addSet",mId,eId,sid})} visible={fabVisible} left/>
-          <FloatBtn label="Done ✓" onClick={()=>setWizard(null)} visible={fabVisible} right/>
-        </div>
+        <SetsLogger mId={mId} eId={eId} sid={sid} date={date} muscle={muscle} exer={exer} session={session}
+          onBack={()=>{
+            // If no sets logged, clean up the empty session before going back
+            if(!session?.sets?.length) delSession(mId,eId,sid);
+            setWizard(w=>({...w,step:"exercise",sid:null}));
+          }}
+          onDone={()=>{setWizard(null);setViewDay(date);setScreen("day");}}/>
       );
     }
     return null;
   }
 
-  // ── CALENDAR OVERLAY ─────────────────────────────────────
+  // ── SETS LOGGER (inline input + rest timer) ──────────────
+
+  // ── TIMER BAR — shared between SetsLogger & ExerciseDetail ──
+  // State lives in timerMap ref keyed by sid. No storage.
+  function TimerBar({sid}){
+    const MAX_SEC=30*60; // 30 minutes — then auto-stop and clear
+    const [,forceRender]=useState(0);
+    const tick=()=>forceRender(n=>n+1);
+
+    useEffect(()=>{
+      let iv=null;
+      if(timerMap.current[sid]?.running){
+        iv=setInterval(()=>{
+          const t=timerMap.current[sid];
+          if(!t?.running){ clearInterval(iv); return; }
+          const totalElapsed=t.elapsed+Math.floor((Date.now()-t.start)/1000);
+          if(totalElapsed>=MAX_SEC){
+            // Hit 30 min — stop and wipe
+            delete timerMap.current[sid];
+            clearInterval(iv);
+          }
+          forceRender(n=>n+1);
+        },1000);
+      }
+      return ()=>{ if(iv) clearInterval(iv); };
+    },[sid, timerMap.current[sid]?.running]);
+
+    const t=timerMap.current[sid]||{running:false,elapsed:0,start:null};
+    const elapsed=t.running ? t.elapsed+Math.floor((Date.now()-t.start)/1000) : t.elapsed;
+    const mm=String(Math.floor(elapsed/60)).padStart(2,"0");
+    const ss=String(elapsed%60).padStart(2,"0");
+    const active=t.running||t.elapsed>0;
+
+    const start=()=>{
+      timerMap.current[sid]={running:true,elapsed:t.elapsed,start:Date.now()};
+      tick();
+    };
+    const stop=()=>{
+      const cur=timerMap.current[sid]||{elapsed:0};
+      timerMap.current[sid]={running:false,elapsed:cur.elapsed+Math.floor((Date.now()-cur.start)/1000),start:null};
+      tick();
+    };
+    const reset=()=>{ delete timerMap.current[sid]; tick(); };
+
+    return(
+      <div style={{display:"flex",alignItems:"center",gap:8,padding:"8px 14px",
+        background:"#0a0a0a",borderBottom:"1px solid #141414",flexShrink:0}}>
+        <div style={{background:active?"#0d1400":"#0d0d0d",border:`1px solid ${active?"#1e3000":"#1a1a1a"}`,
+          borderRadius:8,padding:"6px 12px",minWidth:68,textAlign:"center",flexShrink:0}}>
+          <div style={{fontSize:17,fontWeight:700,color:active?C.green:"#2a2a2a",letterSpacing:2,fontVariantNumeric:"tabular-nums"}}>{mm}:{ss}</div>
+          <div style={{fontSize:7,color:"#2a3a10",letterSpacing:2,textTransform:"uppercase",marginTop:1}}>rest</div>
+        </div>
+        <button style={{...bkBtn,padding:"10px 14px",fontSize:15,
+          color:t.running?"#ff8800":"#6a9a00",
+          borderColor:t.running?"#3a1a00":"#1e3000"}}
+          onClick={t.running?stop:start}>
+          {t.running?"⏸":"▶"}
+        </button>
+        {!t.running&&t.elapsed>0&&(
+          <button style={{...bkBtn,padding:"10px 14px",fontSize:14,color:"#555",borderColor:"#1a1a1a"}}
+            onClick={reset}>↺</button>
+        )}
+        <div style={{flex:1,fontSize:9,color:"#252525",letterSpacing:1,textTransform:"uppercase",textAlign:"right"}}>
+          {t.running?`stops at 30:00`:active?"stopped":"▶ to time rest"}
+        </div>
+      </div>
+    );
+  }
+
+    function SetsLogger({mId,eId,sid,date,muscle,exer,session,onBack,onDone}){
+    const rScrollRef=useRef(null);
+    const rFabVisible=useScrollVisible(rScrollRef);
+
+    return(
+      <div style={{minHeight:"100vh",display:"flex",flexDirection:"column"}}>
+        <div style={hdr}>
+          <button style={bkBtn} onClick={onBack}>← Back</button>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={ttl}>{exer?.name}</div>
+            <div style={sub}>{muscle?.name} · {fmtDate(date)}</div>
+          </div>
+        </div>
+        <StatsBar sets={session.sets}/>
+        <TimerBar sid={sid}/>
+        {(()=>{
+          // Find last session of same exercise (not current) to offer copy
+          const prevSess = sortSess(exer?.sessions||[]).find(s=>s.id!==sid&&s.sets.length>0);
+          if(!prevSess) return null;
+          return(
+            <div style={{borderBottom:"1px solid #141414",padding:"8px 14px",display:"flex",alignItems:"center",gap:10,background:"#0a0a0a"}}>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:11,color:"#555",letterSpacing:1}}>
+                  Last session · {fmtDate(prevSess.date)}
+                </div>
+                <div style={{fontSize:10,color:"#3a3a3a",marginTop:2}}>
+                  {prevSess.sets.map((s,i)=>{
+                    if(s.type==="super") return `S${i+1}: super`;
+                    const w=s.weight!=null?`${s.weight}kg`:"bw";
+                    return `S${i+1}: ${w}×${s.reps}`;
+                  }).join("  ·  ")}
+                </div>
+              </div>
+              <button
+                style={{...bkBtn,padding:"8px 12px",fontSize:11,color:"#6a9a00",borderColor:"#1e3000",flexShrink:0,whiteSpace:"nowrap"}}
+                onClick={()=>{
+                  prevSess.sets.forEach(s=>{
+                    addSet(mId,eId,sid,{
+                      weight:s.weight,reps:s.reps,type:s.type||"normal",
+                      note:s.note||"",dropSets:s.dropSets||[],superSets:s.superSets||[]
+                    });
+                  });
+                }}>
+                ⎘ Copy sets
+              </button>
+            </div>
+          );
+        })()}
+        <div ref={rScrollRef} style={{flex:1,overflowY:"auto",paddingBottom:110}}>
+          {session.sets.length===0
+            ? <div style={mpt}>No sets yet<br/>Tap + Log Set to start</div>
+            : <>
+                <div style={sLbl}>Sets</div>
+                <SetList sets={session.sets} mId={mId} eId={eId} sid={sid}/>
+              </>
+          }
+        </div>
+        <FloatBtn label="+ Log Set" onClick={()=>setModal({type:"addSet",mId,eId,sid})} visible={rFabVisible} left/>
+        {session.sets.length>0&&<FloatBtn label="Done ✓" onClick={onDone} visible={rFabVisible} right/>}
+      </div>
+    );
+  }
+
+    // ── CALENDAR OVERLAY ─────────────────────────────────────
   function CalendarOverlay(){
     const today = new Date();
     const [yr,  setYr]  = useState(today.getFullYear());
@@ -1319,6 +1560,15 @@ export default function App(){
 
     const prevMon = ()=>{ if(mon===0){setMon(11);setYr(y=>y-1);}else setMon(m=>m-1); };
     const nextMon = ()=>{ if(mon===11){setMon(0);setYr(y=>y+1);}else setMon(m=>m+1); };
+    const calSwipeRef=useRef(null);
+    const onCalSwipeStart=e=>{const t=e.touches[0];calSwipeRef.current={x:t.clientX,y:t.clientY};};
+    const onCalSwipeEnd=e=>{
+      if(!calSwipeRef.current) return;
+      const dx=calSwipeRef.current.x-e.changedTouches[0].clientX;
+      const dy=Math.abs(calSwipeRef.current.y-e.changedTouches[0].clientY);
+      if(Math.abs(dx)>50&&dy<60){ dx>0?nextMon():prevMon(); }
+      calSwipeRef.current=null;
+    };
 
     const cells = [];
     // Empty cells before first day
@@ -1357,7 +1607,8 @@ export default function App(){
           </div>
 
           {/* Day cells */}
-          <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:4}}>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:4}}
+            onTouchStart={onCalSwipeStart} onTouchEnd={onCalSwipeEnd}>
             {cells.map((d,i)=>{
               if(!d) return <div key={i}/>;
               const ds=dateStr(d);
@@ -1383,6 +1634,9 @@ export default function App(){
                   {bw!=null&&(
                     <div style={{fontSize:7,color:"#4a7a00",letterSpacing:0.5,marginTop:1,lineHeight:1}}>{bw}kg</div>
                   )}
+                  {dailySteps[ds]!=null&&(
+                    <div style={{fontSize:7,color:"#2a8aaa",letterSpacing:0.5,marginTop:1,lineHeight:1}}>{dailySteps[ds]>=1000?`${(dailySteps[ds]/1000).toFixed(1)}k`:dailySteps[ds]}s</div>
+                  )}
                 </div>
               );
             })}
@@ -1404,46 +1658,83 @@ export default function App(){
 
   // ── HOME ─────────────────────────────────────────────────
   function Home(){
-    const days=groupByDay(getAllSessions(muscles));
+    const exDays=groupByDay(getAllSessions(muscles));
+    // Merge in dates that only have BW or steps (no exercises)
+    const allDateSet=new Set(exDays.map(d=>d.date));
+    Object.keys(dailyWeights).forEach(d=>{ if(dailyWeights[d]!=null) allDateSet.add(d); });
+    Object.keys(dailySteps).forEach(d=>{ if(dailySteps[d]!=null) allDateSet.add(d); });
+    const days=[...allDateSet].sort((a,b)=>b.localeCompare(a)).map(date=>{
+      const found=exDays.find(d=>d.date===date);
+      return {date, sessions:found?found.sessions:[]};
+    });
     const PREVIEW=2;
+    const today=new Date().toISOString().slice(0,10);
+
+    const statsItems=[
+      {label:"Sessions",value:weekSessions||"-",sub:"this week"},
+      {label:"Streak",value:streak?`${streak}d`:"0d",sub:streak>=3?"🔥 on fire!":streak>0?"keep going":"start today"},
+      {label:"Exercises",value:weekTotalEx||"-",sub:"this week"},
+    ];
+
     return (
       <div style={{minHeight:"100vh",display:"flex",flexDirection:"column"}}>
         <div style={hdr}>
           <button style={mnBtn} onClick={()=>setSidebar(true)}>☰</button>
           <div style={{flex:1,minWidth:0}}>
             <div style={ttl}>GymLog</div>
-            <div style={{...sub,fontSize:11,letterSpacing:1,color:"#555"}}>{activeUser?.name} · Push harder than yesterday 💪</div>
+            <div style={{...sub,fontSize:11,letterSpacing:1,color:"#555"}}>{activeUser?.name} · Push harder 💪</div>
           </div>
           <button style={{...mnBtn,fontSize:18}} onClick={()=>setCalOpen(true)}>📅</button>
         </div>
 
         <div ref={scrollRef} style={{flex:1,overflowY:"auto",paddingBottom:110}}>
+
+          {/* ── Weekly stats strip ── */}
+          <div style={{display:"flex",borderBottom:"1px solid #141414",background:"#0c0c0c"}}>
+            {statsItems.map((st,i)=>(
+              <div key={st.label} style={{flex:1,padding:"12px 0",textAlign:"center",borderRight:i<2?"1px solid #141414":"none"}}>
+                <div style={{fontSize:18,fontWeight:700,color:C.green,letterSpacing:-0.5}}>{st.value}</div>
+                <div style={{fontSize:8,color:"#555",letterSpacing:2,textTransform:"uppercase",marginTop:2}}>{st.label}</div>
+                <div style={{fontSize:8,color:"#2a3a10",marginTop:1}}>{st.sub}</div>
+              </div>
+            ))}
+          </div>
+
           {days.length===0&&<div style={mpt}>No sessions yet<br/>Tap Record Session to start</div>}
           {days.map(({date,sessions})=>{
             const totalSets=sessions.reduce((a,s)=>a+s.sets.length,0);
             const visible=sessions.slice(0,PREVIEW);
             const hidden=sessions.length-PREVIEW;
             const goToDay=()=>{ setViewDay(date); setScreen("day"); };
+            const bw=dailyWeights[date];
+            const st=dailySteps[date];
+            const bwOnlyDay=sessions.length===0;
             return(
               <div key={date} style={{margin:"6px 14px",background:C.card,border:`1px solid ${C.border}`,borderRadius:12,overflow:"hidden",cursor:"pointer"}}
                 onClick={goToDay}
                 onMouseEnter={e=>e.currentTarget.style.borderColor="#2a2a2a"}
                 onMouseLeave={e=>e.currentTarget.style.borderColor=C.border}>
                 {/* Day header */}
-                <div style={{padding:"11px 14px 9px",borderBottom:"1px solid #161616",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
-                  <div style={{fontWeight:700,fontSize:13,color:C.text,letterSpacing:0.5}}>{fmtDate(date)}</div>
-                  <div style={{fontSize:10,color:"#3a3a3a",letterSpacing:1}}>{sessions.length} exercise{sessions.length!==1?"s":""} · {totalSets} sets</div>
+                <div style={{padding:"10px 14px 8px",borderBottom:bwOnlyDay?"none":"1px solid #161616",display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
+                  <div style={{fontWeight:700,fontSize:13,color:C.text,letterSpacing:0.5,flex:1,minWidth:0}}>{fmtDate(date)}</div>
+                  <div style={{display:"flex",gap:5,alignItems:"center",flexShrink:0}}>
+                    {!bwOnlyDay&&<div style={{fontSize:10,color:"#3a3a3a",letterSpacing:1}}>{sessions.length} ex · {totalSets} sets</div>}
+                  </div>
                 </div>
-                {/* Exercise rows — compact preview */}
+                {/* Exercise rows — compact preview with color accent */}
                 {visible.map((s,i)=>{
                   const maxW=s.sets.filter(t=>t.weight!=null).length?Math.max(...s.sets.filter(t=>t.weight!=null).map(t=>t.weight)):0;
+                  const vol=s.sets.filter(t=>t.weight!=null).reduce((a,t)=>a+t.weight*t.reps,0);
+                  const color=getMuscleColor(s.mName);
                   return(
-                    <div key={s.id} style={{display:"flex",alignItems:"center",gap:8,padding:"8px 14px",borderTop:i>0?"1px solid #111":"none"}}>
-                      <MuscleIcon muscle={s.mName} size={26}/>
+                    <div key={s.id} style={{display:"flex",alignItems:"center",gap:8,padding:"8px 14px",
+                      borderTop:i>0?"1px solid #111":"none",
+                      borderLeft:`3px solid ${color}22`}}>
+                      <MuscleIcon muscle={s.mName} size={26} showColor/>
                       <div style={{flex:1,minWidth:0}}>
                         <div style={{fontSize:12,fontWeight:600,color:"#c0c0c0",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{s.eName}</div>
                         <div style={{fontSize:10,color:C.muted,marginTop:1}}>
-                          {s.sets.length} sets{maxW>0?` · ${maxW}kg`:""}
+                          {s.sets.length} sets{maxW>0?` · ${maxW}kg`:""}{vol>0?` · ${vol}kg vol`:""}
                         </div>
                       </div>
                       <button style={{...dBtn,fontSize:15,padding:"4px 8px"}}
@@ -1457,6 +1748,12 @@ export default function App(){
                 {hidden>0&&(
                   <div style={{padding:"6px 14px",borderTop:"1px solid #111",textAlign:"center"}}>
                     <span style={{fontSize:10,color:"#3a3a3a",letterSpacing:1,textTransform:"uppercase"}}>+{hidden} more ▼</span>
+                  </div>
+                )}
+                {/* BW/steps only day — show quiet placeholder */}
+                {bwOnlyDay&&(
+                  <div style={{padding:"10px 14px",display:"flex",alignItems:"center",gap:8}}>
+                    <div style={{fontSize:10,color:"#2a2a2a",fontStyle:"italic",letterSpacing:0.5}}>No exercises logged</div>
                   </div>
                 )}
               </div>
@@ -1480,7 +1777,14 @@ export default function App(){
 
     useEffect(()=>setLocalSessions(getAllSessions(muscles).filter(s=>s.date===viewDay)),[data,viewDay]);
 
-    if(!localSessions.length||localSessions===undefined) return null;
+    // If no exercises AND no body weight AND no steps → nothing left, go home
+    useEffect(()=>{
+      const bw=dailyWeights[viewDay];
+      const st=dailySteps[viewDay];
+      if(localSessions.length===0&&bw==null&&(st==null||st===undefined)){
+        setScreen("home");
+      }
+    },[localSessions,dailyWeights,dailySteps,viewDay]);
 
     const startLongPress=(i,e)=>{
       e.stopPropagation();
@@ -1533,32 +1837,33 @@ export default function App(){
           </div>
         </div>
         <div ref={scrollRef} style={{flex:1,overflowY:"auto",paddingBottom:110}}>
-          {/* ── Body weight card — big, not draggable ── */}
+          {/* ── Body weight + Steps — two side-by-side buttons ── */}
           {(()=>{
-            const bw=dailyWeights[viewDay];
-            const logged=bw!=null;
+            const bw=dailyWeights[viewDay]; const st=dailySteps[viewDay];
+            const btnBase={flex:1,display:"flex",flexDirection:"column",alignItems:"center",gap:4,
+              padding:"10px 8px",borderRadius:10,cursor:"pointer",border:"1px solid",transition:"border-color 0.15s"};
             return(
-              <div style={{...crd,
-                borderColor:logged?"#1e3000":C.border,
-                background:logged?"#0d1400":C.card,
-              }}
-                onClick={()=>setModal({type:"dayWeight",date:viewDay})}
-                onMouseEnter={e=>e.currentTarget.style.borderColor=logged?"#2a4400":"#2a2a2a"}
-                onMouseLeave={e=>e.currentTarget.style.borderColor=logged?"#1e3000":C.border}>
-                <div style={{width:44,height:44,borderRadius:10,background:logged?"#1a2e00":"#131313",
-                  border:`1px solid ${logged?"#2a4400":"#1e1e1e"}`,
-                  display:"flex",alignItems:"center",justifyContent:"center",fontSize:22,flexShrink:0}}>
-                  🏋
-                </div>
-                <div style={{flex:1,minWidth:0}}>
-                  <div style={{fontWeight:600,fontSize:14,color:logged?C.green:C.muted}}>Body Weight</div>
-                  <div style={{fontSize:11,color:logged?"#4a7a00":C.muted,marginTop:3}}>
-                    {logged?`${bw} kg — tap to edit`:"Optional · tap to log today's weight"}
+              <div style={{display:"flex",gap:8,padding:"10px 14px 4px"}}>
+                <div style={{...btnBase,background:bw!=null?"#0d1400":C.card,borderColor:bw!=null?"#1e3000":C.border}}
+                  onClick={()=>setModal({type:"dayWeight",date:viewDay})}
+                  onMouseEnter={e=>e.currentTarget.style.borderColor=bw!=null?"#2a4400":"#2a2a2a"}
+                  onMouseLeave={e=>e.currentTarget.style.borderColor=bw!=null?"#1e3000":C.border}>
+                  <span style={{fontSize:18}}>🏋</span>
+                  <div style={{fontSize:10,fontWeight:700,color:bw!=null?C.green:C.muted,letterSpacing:0.5}}>Body Weight</div>
+                  <div style={{fontSize:11,color:bw!=null?"#4a7a00":"#2a2a2a",fontWeight:bw!=null?700:400}}>
+                    {bw!=null?`${bw} kg`:"— kg"}
                   </div>
                 </div>
-                <span style={{color:logged?C.green:"#2a2a2a",fontSize:logged?15:18,fontWeight:700}}>
-                  {logged?"✓":"›"}
-                </span>
+                <div style={{...btnBase,background:st!=null?"#00141e":C.card,borderColor:st!=null?"#003a4a":C.border}}
+                  onClick={()=>setModal({type:"daySteps",date:viewDay})}
+                  onMouseEnter={e=>e.currentTarget.style.borderColor=st!=null?"#005a70":"#2a2a2a"}
+                  onMouseLeave={e=>e.currentTarget.style.borderColor=st!=null?"#003a4a":C.border}>
+                  <span style={{fontSize:18}}>👟</span>
+                  <div style={{fontSize:10,fontWeight:700,color:st!=null?"#5bc8f5":C.muted,letterSpacing:0.5}}>Steps</div>
+                  <div style={{fontSize:11,color:st!=null?"#2a7a9a":"#2a2a2a",fontWeight:st!=null?700:400}}>
+                    {st!=null?(st>=1000?`${(st/1000).toFixed(1)}k`:`${st}`):"— steps"}
+                  </div>
+                </div>
               </div>
             );
           })()}
@@ -1571,35 +1876,70 @@ export default function App(){
               const vol =s.sets.filter(t=>t.weight!=null).reduce((a,t)=>a+t.weight*t.reps,0);
               const isDragging=dragging===i;
               const isOver=dragOver===i&&dragging!==null&&dragging!==i;
+              const isExpanded=expandedDay===s.id;
+              const color=getMuscleColor(s.mName);
               return(
                 <div key={s.id} ref={el=>rowRefs.current[i]=el}
-                  style={{...crd,
+                  style={{...crd,flexDirection:"column",alignItems:"stretch",padding:0,overflow:"hidden",
                     opacity:isDragging?0.35:1,
-                    borderColor:isOver?C.green:C.border,
+                    borderColor:isOver?C.green:isExpanded?color+"66":C.border,
                     transform:isOver?"translateY(-2px)":"translateY(0)",
                     transition:"opacity 0.15s,border-color 0.1s,transform 0.1s",
+                    borderLeft:`3px solid ${color}44`,
                   }}>
-                  <span
-                    style={{fontSize:16,color:isDragging?"#c8f72c":"#2e2e2e",padding:"6px 8px",flexShrink:0,cursor:"grab",userSelect:"none"}}
-                    onTouchStart={e=>startLongPress(i,e)}
-                    onTouchEnd={cancelLongPress}
-                    onMouseDown={e=>e.stopPropagation()}>⠿</span>
-                  <div style={{flex:1,minWidth:0,display:"flex",alignItems:"center",gap:12,cursor:"pointer"}}
-                    onClick={()=>{ prevScreen.current="day"; setViewSid({mId:s.mId,eId:s.eId,sid:s.id}); setScreen("exercise"); }}>
-                    <MuscleIcon muscle={s.mName} size={38}/>
-                    <div style={{flex:1,minWidth:0}}>
-                      <div style={{fontWeight:600,fontSize:14}}>{s.eName}</div>
-                      <div style={{fontSize:11,color:C.muted,marginTop:3}}>
-                        {s.mName} · {s.sets.length} sets{maxW>0?` · Max ${maxW}kg`:""}
-                        {vol>0?` · Vol ${vol}kg`:""}
+                  {/* Card header row */}
+                  <div style={{display:"flex",alignItems:"center",padding:"14px 14px 14px 10px"}}>
+                    <span
+                      style={{fontSize:16,color:isDragging?"#c8f72c":"#2e2e2e",padding:"6px 8px",flexShrink:0,cursor:"grab",userSelect:"none"}}
+                      onTouchStart={e=>startLongPress(i,e)}
+                      onTouchEnd={cancelLongPress}
+                      onMouseDown={e=>e.stopPropagation()}>⠿</span>
+                    <div style={{flex:1,minWidth:0,display:"flex",alignItems:"center",gap:12,cursor:"pointer"}}
+                      onClick={()=>{ prevScreen.current="day"; setViewSid({mId:s.mId,eId:s.eId,sid:s.id}); setScreen("exercise"); }}>
+                      <MuscleIcon muscle={s.mName} size={38} showColor/>
+                      <div style={{flex:1,minWidth:0}}>
+                        <div style={{fontWeight:600,fontSize:14}}>{s.eName}</div>
+                        <div style={{fontSize:11,color:C.muted,marginTop:3}}>
+                          {s.mName} · {s.sets.length} sets{maxW>0?` · Max ${maxW}kg`:""}
+                          {vol>0?` · ${vol}kg vol`:""}
+                        </div>
+                        {s.note&&<div style={{fontSize:11,color:"#3a5818",marginTop:3,fontStyle:"italic"}}>"{s.note}"</div>}
                       </div>
-                      {s.note&&<div style={{fontSize:11,color:"#3a5818",marginTop:3,fontStyle:"italic"}}>"{s.note}"</div>}
                     </div>
+                    {/* Expand toggle */}
+                    <button style={{...dBtn,fontSize:13,color:isExpanded?color:"#2a2a2a",padding:"4px 6px"}}
+                      onClick={e=>{e.stopPropagation();setExpandedDay(isExpanded?null:s.id);}}
+                      onMouseEnter={ev=>ev.currentTarget.style.color=color}
+                      onMouseLeave={ev=>ev.currentTarget.style.color=isExpanded?color:"#2a2a2a"}>
+                      {isExpanded?"▲":"▼"}
+                    </button>
+                    <button style={dBtn}
+                      onClick={e=>{e.stopPropagation();setModal({type:"confirm",msg:"Delete this exercise?",onOk:()=>delSession(s.mId,s.eId,s.id)});}}
+                      onMouseEnter={e=>e.currentTarget.style.color="#cc2222"}
+                      onMouseLeave={e=>e.currentTarget.style.color="#252525"}>✕</button>
                   </div>
-                  <button style={dBtn}
-                    onClick={e=>{e.stopPropagation();setModal({type:"confirm",msg:"Delete this exercise?",onOk:()=>delSession(s.mId,s.eId,s.id)});}}
-                    onMouseEnter={e=>e.currentTarget.style.color="#cc2222"}
-                    onMouseLeave={e=>e.currentTarget.style.color="#252525"}>✕</button>
+                  {/* Inline expanded sets */}
+                  {isExpanded&&s.sets.length>0&&(
+                    <div style={{borderTop:"1px solid #161616",background:"#0a0a0a",padding:"8px 14px 10px"}}>
+                      {s.sets.map((t,ti)=>(
+                        <div key={t.id} style={{display:"flex",alignItems:"center",gap:6,padding:"4px 0",borderBottom:ti<s.sets.length-1?"1px solid #111":"none"}}>
+                          <span style={{fontSize:9,color:"#2a2a2a",width:22,flexShrink:0}}>S{ti+1}</span>
+                          {t.type==="super"
+                            ?<span style={{fontSize:12,color:"#888"}}>Super · {t.superSets?.length||0} ex</span>
+                            :<>
+                              {t.weight!=null&&<><span style={{fontSize:14,fontWeight:700,color:color}}>{t.weight}</span><span style={{fontSize:9,color:C.dim}}>kg ×</span></>}
+                              <span style={{fontSize:14,fontWeight:700,color:color}}>{t.reps}</span>
+                              <span style={{fontSize:9,color:C.dim}}>reps</span>
+                            </>
+                          }
+                          {t.type!=="normal"&&<span style={{fontSize:8,color:"#555",marginLeft:2,background:"#181818",borderRadius:4,padding:"1px 5px"}}>{t.type}</span>}
+                          <span style={{marginLeft:"auto",fontSize:10,color:"#243810"}}>
+                            {t.weight!=null&&t.reps?`${Math.round(t.weight*t.reps)}kg`:""}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -1626,17 +1966,65 @@ export default function App(){
       </div>
     );
     const sessions=sortSess(exer.sessions).map(s=>({...s,mId,mName:muscle?.name,eName:exer.name,eId}));
+
+    // ── Sparkline data: max weight per session (chronological) ──
+    const sparkData=[...sessions].reverse().map(s=>{
+      const ws=s.sets.filter(t=>t.weight!=null);
+      return ws.length?Math.max(...ws.map(t=>t.weight)):0;
+    }).filter(v=>v>0);
+    const sparkMin=sparkData.length?Math.min(...sparkData):0;
+    const sparkMax=sparkData.length?Math.max(...sparkData):1;
+    const sparkH=56; const sparkW=280;
+    const toY=v=>sparkH-((v-sparkMin)/(sparkMax-sparkMin||1))*(sparkH-10)-5;
+    const toX=(i,len)=>(i/(Math.max(len-1,1)))*sparkW;
+    const color=getMuscleColor(muscle?.name||"");
+
     return (
       <div style={{minHeight:"100vh",display:"flex",flexDirection:"column"}}>
-        <div style={hdr}>
+        <div style={{...hdr,borderBottom:"none"}}>
           <button style={bkBtn} onClick={()=>setScreen("home")}>← Back</button>
           <div style={{flex:1,minWidth:0}}>
             <div style={ttl}>{exer.name}</div>
             <div style={sub}>{muscle?.name} · {exer.sessions.length} sessions</div>
           </div>
         </div>
+
+        {/* ── Progress sparkline ── */}
+        {sparkData.length>=2&&(
+          <div style={{background:"#0c0c0c",borderBottom:"1px solid #141414",padding:"12px 14px 14px"}}>
+            <div style={{fontSize:9,color:"#555",letterSpacing:3,textTransform:"uppercase",marginBottom:8}}>Max Weight Progress</div>
+            <div style={{position:"relative",height:sparkH,overflowX:"hidden"}}>
+              <svg width="100%" height={sparkH} viewBox={`0 0 ${sparkW} ${sparkH}`} preserveAspectRatio="none">
+                {/* Filled area */}
+                <defs>
+                  <linearGradient id="spkGrad" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor={color} stopOpacity="0.3"/>
+                    <stop offset="100%" stopColor={color} stopOpacity="0"/>
+                  </linearGradient>
+                </defs>
+                <path
+                  d={`M${toX(0,sparkData.length)},${toY(sparkData[0])} ${sparkData.slice(1).map((_,i)=>`L${toX(i+1,sparkData.length)},${toY(sparkData[i+1])}`).join(" ")} L${toX(sparkData.length-1,sparkData.length)},${sparkH} L0,${sparkH} Z`}
+                  fill="url(#spkGrad)"/>
+                {/* Line */}
+                <polyline
+                  points={sparkData.map((_,i)=>`${toX(i,sparkData.length)},${toY(sparkData[i])}`).join(" ")}
+                  fill="none" stroke={color} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round"/>
+                {/* Dots */}
+                {sparkData.map((v,i)=>(
+                  <circle key={i} cx={toX(i,sparkData.length)} cy={toY(v)} r="3" fill={color}/>
+                ))}
+              </svg>
+            </div>
+            <div style={{display:"flex",justifyContent:"space-between",marginTop:4}}>
+              <div style={{fontSize:8,color:"#333",fontFamily:"inherit"}}>{sparkMin}kg</div>
+              <div style={{fontSize:8,color:color,fontWeight:700}}>{sparkMax}kg peak</div>
+            </div>
+          </div>
+        )}
+
         <div ref={scrollRef} style={{flex:1,overflowY:"auto",paddingBottom:110}}>
-          {sessions.length===0&&<div style={mpt}>No sessions yet<br/>Tap Record Session to start</div>}          {sessions.map((s,i)=>{
+          {sessions.length===0&&<div style={mpt}>No sessions yet<br/>Tap Record Session to start</div>}
+          {sessions.map((s,i)=>{
             const maxW=s.sets.filter(t=>t.weight!=null).length?Math.max(...s.sets.filter(t=>t.weight!=null).map(t=>t.weight)):0;
             const vol =s.sets.filter(t=>t.weight!=null).reduce((a,t)=>a+t.weight*t.reps,0);
             return(
@@ -1675,8 +2063,6 @@ export default function App(){
     const muscle  = getMuscle(mId);
     const exer    = getEx(mId,eId);
     const session = getSess(mId,eId,sid);
-    const [editNote,setEN]=useState(false);
-    const [noteVal, setNV]=useState(session?.note||"");
     if(!session) return null;
     return (
       <div style={{minHeight:"100vh",display:"flex",flexDirection:"column"}}>
@@ -1688,21 +2074,10 @@ export default function App(){
           </div>
         </div>
         <StatsBar sets={session.sets}/>
+        <TimerBar sid={sid}/>
         <div ref={scrollRef} style={{flex:1,overflowY:"auto",paddingBottom:110}}>
-          <div style={{padding:"10px 14px"}}>
-            {!editNote
-              ?<div style={nBox} onClick={()=>{setEN(true);setNV(session.note);}}>
-                {session.note||<span style={{color:"#1c1c1c"}}>+ Add session note…</span>}
-              </div>
-              :<input style={{...inp,marginBottom:0}} autoFocus value={noteVal}
-                onChange={e=>setNV(e.target.value)}
-                onBlur={()=>{updateNote(mId,eId,sid,noteVal);setEN(false);}}
-                onKeyDown={e=>{if(e.key==="Enter"){updateNote(mId,eId,sid,noteVal);setEN(false);}}}/>
-            }
-          </div>
           <div style={sLbl}>Sets</div>
           <SetList sets={session.sets} mId={mId} eId={eId} sid={sid}/>
-
         </div>
         <FloatBtn label="+ Log Set" onClick={()=>setModal({type:"addSet",mId,eId,sid})} visible={fabVisible} left/>
       </div>
@@ -1749,6 +2124,7 @@ export default function App(){
       {modal?.type==="editSet"  &&<EditSetModal mId={modal.mId} eId={modal.eId} sid={modal.sid} set={modal.set}/>}
       {modal?.type==="confirm"  &&<ConfirmModal msg={modal.msg} onOk={modal.onOk}/>}
       {modal?.type==="dayWeight" &&<DayWeightModal date={modal.date}/>}
+      {modal?.type==="daySteps"  &&<DayStepsModal  date={modal.date}/>}
     </div>
   );
 }
