@@ -160,6 +160,7 @@ export default function App(){
   const [sidebar, setSidebar] = useState(false);
   const [anatomyOpen, setAnatomyOpen] = useState(false);
   const [bwOpen, setBwOpen] = useState(false);
+  const [stepsOpen, setStepsOpen] = useState(false);
   const [modal,   setModal]   = useState(null);
   const [sbOpen,  setSbOpen]  = useState({});
   const [calOpen, setCalOpen] = useState(false);  // calendar overlay
@@ -205,6 +206,27 @@ export default function App(){
     return ()=>{ document.removeEventListener("mousedown",fn); document.removeEventListener("touchstart",fn); };
   },[sidebar]);
 
+  // Swipe-right from left edge to open sidebar
+  useEffect(()=>{
+    if(sidebar||wizard||modal) return;
+    let startX=null, startY=null;
+    const onStart=e=>{
+      const t=e.touches[0];
+      if(t.clientX>40) return; // only trigger from left 40px edge
+      startX=t.clientX; startY=t.clientY;
+    };
+    const onEnd=e=>{
+      if(startX===null) return;
+      const dx=e.changedTouches[0].clientX-startX;
+      const dy=Math.abs(e.changedTouches[0].clientY-startY);
+      if(dx>50&&dy<60) setSidebar(true);
+      startX=null; startY=null;
+    };
+    document.addEventListener("touchstart",onStart,{passive:true});
+    document.addEventListener("touchend",onEnd,{passive:true});
+    return ()=>{ document.removeEventListener("touchstart",onStart); document.removeEventListener("touchend",onEnd); };
+  },[sidebar,wizard,modal]);
+
   const capApp   = useRef(null);   // Capacitor App plugin ref for minimizeApp
   const timerMap = useRef({});     // sid -> {running,elapsed,start} — memory only, never persisted
   const prevScreen = useRef("home"); // track where ExerciseDetail was opened from
@@ -225,12 +247,13 @@ export default function App(){
       }
     };
     go(); return ()=>h?.remove();
-  },[modal,sidebar,calOpen,anatomyOpen,bwOpen,wizard,screen,viewDay,viewEx]);
+  },[modal,sidebar,calOpen,anatomyOpen,bwOpen,stepsOpen,wizard,screen,viewDay,viewEx]);
 
   function handleBack(){
     if(modal){setModal(null);return;}
     if(calOpen){setCalOpen(false);return;}
     if(sidebar){setSidebar(false);return;}
+    if(stepsOpen){setStepsOpen(false);return;}
     if(bwOpen){setBwOpen(false);return;}
     if(anatomyOpen){setAnatomyOpen(false);setScreen("home");return;}
     if(wizard){
@@ -1097,23 +1120,7 @@ export default function App(){
 
         {/* Fixed bottom area */}
         <div style={{flexShrink:0,borderTop:"1px solid #1a1a1a",background:"#0f0f0f",padding:"12px 18px 8px"}}>
-          <div style={{display:"flex",gap:8}}>
-            <button style={{flex:1,background:"#111",border:"1px solid #1e1e1e",color:"#c8f72c",borderRadius:8,
-              fontWeight:700,letterSpacing:1,cursor:"pointer",...T,fontSize:11,padding:"10px 6px",
-              display:"flex",flexDirection:"column",alignItems:"center",gap:4}}
-              onMouseDown={e=>{e.stopPropagation();setAnatomyOpen(true);}}>
-              <span style={{fontSize:20}}>🫀</span>
-              <span>Anatomy</span>
-            </button>
-            <button style={{flex:1,background:"#111",border:"1px solid #1e1e1e",color:"#c8f72c",borderRadius:8,
-              fontWeight:700,letterSpacing:1,cursor:"pointer",...T,fontSize:11,padding:"10px 6px",
-              display:"flex",flexDirection:"column",alignItems:"center",gap:4}}
-              onMouseDown={e=>{e.stopPropagation();setBwOpen(true);}}>
-              <span style={{fontSize:20}}>🏋</span>
-              <span>Weight Graph</span>
-            </button>
-          </div>
-          <button style={{...btn(true),display:"block",width:"100%",marginTop:8,fontSize:15,padding:"14px"}}
+          <button style={{...btn(true),display:"block",width:"100%",fontSize:15,padding:"14px"}}
             onMouseDown={e=>{e.stopPropagation();setModal({type:"addMuscle"});}}>+ Add Muscle Group</button>
         </div>
         <div style={{textAlign:"center",padding:"6px 20px 34px",fontSize:12,color:"#555",letterSpacing:2,...T,flexShrink:0,background:"#0f0f0f"}}>
@@ -1307,6 +1314,165 @@ export default function App(){
                 ].map(st=>(
                   <div key={st.label} style={{flex:1,background:"#0c0c0c",border:"1px solid #1a1a1a",borderRadius:8,padding:"10px 8px",textAlign:"center"}}>
                     <div style={{fontSize:15,fontWeight:700,color:st.color||C.text,letterSpacing:-0.5}}>{st.value}</div>
+                    <div style={{fontSize:8,color:"#3a3a3a",letterSpacing:2,textTransform:"uppercase",marginTop:3}}>{st.label}</div>
+                  </div>
+                ))}
+              </div>
+            );
+          })()}
+        </div>
+      </div>
+    );
+  }
+
+
+  // ── STEPS GRAPH MODAL ─────────────────────────────────────
+  function StepsGraphModal({onClose}){
+    const [selected, setSelected] = useState(null);
+    const svgRef = useRef(null);
+
+    const today = new Date();
+    const points = [];
+    for(let i=29; i>=0; i--){
+      const d = new Date(today);
+      d.setDate(today.getDate()-i);
+      const iso = d.toISOString().slice(0,10);
+      const steps = dailySteps[iso];
+      if(steps!=null) points.push({date:iso, steps, idx:29-i});
+    }
+
+    const W=320, H=180, PAD={top:16,right:16,bottom:40,left:52};
+    const plotW=W-PAD.left-PAD.right;
+    const plotH=H-PAD.top-PAD.bottom;
+
+    const vals = points.map(p=>p.steps);
+    const minV = vals.length ? 0 : 0;
+    const maxV = vals.length ? Math.ceil(Math.max(...vals)*1.1/1000)*1000 : 10000;
+    const range = maxV - minV || 1;
+
+    function xOf(idx){ return PAD.left+(idx/29)*plotW; }
+    function yOf(v){ return PAD.top+plotH-((v-minV)/range)*plotH; }
+
+    const linePoints = points.map(p=>`${xOf(p.idx)},${yOf(p.steps)}`).join(" ");
+    const areaPoints = points.length>=2
+      ? `${xOf(points[0].idx)},${PAD.top+plotH} `+linePoints+` ${xOf(points[points.length-1].idx)},${PAD.top+plotH}`
+      : "";
+
+    const yTicks = [];
+    const tickStep = maxV<=5000?1000:maxV<=10000?2000:5000;
+    for(let v=0; v<=maxV; v+=tickStep) yTicks.push(v);
+
+    const xLabels=[];
+    [0,7,14,21,29].forEach(i=>{
+      const d=new Date(today);
+      d.setDate(today.getDate()-(29-i));
+      xLabels.push({idx:i, label:d.toLocaleDateString("en-US",{month:"short",day:"numeric"})});
+    });
+
+    function fmtSteps(n){ return n>=1000?`${(n/1000).toFixed(1)}k`:String(n); }
+
+    function handleClick(e){
+      if(!svgRef.current||points.length===0) return;
+      const rect=svgRef.current.getBoundingClientRect();
+      const mx=(e.clientX-rect.left)*(W/rect.width);
+      let best=null,bestDist=Infinity;
+      points.forEach(p=>{
+        const d=Math.abs(xOf(p.idx)-mx);
+        if(d<bestDist){bestDist=d;best=p;}
+      });
+      if(best&&bestDist<40) setSelected(s=>s?.date===best.date?null:best);
+      else setSelected(null);
+    }
+
+    const shortDate=iso=>new Date(iso).toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric"});
+
+    return(
+      <div style={{position:"fixed",inset:0,zIndex:60,background:C.bg,display:"flex",flexDirection:"column"}}>
+        <div style={{background:"#0f0f0f",borderBottom:"1px solid #1a1a1a",padding:"44px 18px 16px",display:"flex",alignItems:"center",gap:12,flexShrink:0}}>
+          <button style={{background:"none",border:"1px solid #2a2a2a",color:"#777",borderRadius:6,padding:"10px 14px",cursor:"pointer",fontSize:12,...T,letterSpacing:1,flexShrink:0}}
+            onClick={onClose}>← Back</button>
+          <div style={{fontSize:16,fontWeight:700,letterSpacing:3,textTransform:"uppercase",color:C.text}}>Steps Graph</div>
+        </div>
+
+        <div style={{flex:1,overflowY:"auto",padding:"20px 18px 40px"}}>
+          <div style={{fontSize:10,color:"#3a3a3a",letterSpacing:2,textTransform:"uppercase",marginBottom:16}}>Last 30 days</div>
+
+          {selected?(
+            <div style={{background:"#0d1400",border:"1px solid #1e3000",borderRadius:10,padding:"12px 16px",marginBottom:16,display:"flex",alignItems:"center",gap:12}}>
+              <div style={{fontSize:28,fontWeight:700,color:C.green,letterSpacing:-1}}>{fmtSteps(selected.steps)}<span style={{fontSize:12,color:"#4a7a00",fontWeight:400}}> steps</span></div>
+              <div>
+                <div style={{fontSize:12,color:C.text,fontWeight:600}}>{shortDate(selected.date)}</div>
+                <div style={{fontSize:10,color:"#4a6a00",marginTop:2,letterSpacing:1}}>tap again to deselect</div>
+              </div>
+            </div>
+          ):(
+            <div style={{background:"#111",border:"1px solid #1a1a1a",borderRadius:10,padding:"12px 16px",marginBottom:16,
+              fontSize:10,color:"#3a3a3a",letterSpacing:1,textTransform:"uppercase",textAlign:"center"}}>
+              {points.length>0?"Tap graph to inspect a point":"No step data yet — log steps from any day's view"}
+            </div>
+          )}
+
+          {points.length>0?(
+            <div style={{background:"#0c0c0c",border:"1px solid #1a1a1a",borderRadius:12,overflow:"hidden",padding:"8px 0 4px"}}>
+              <svg ref={svgRef} viewBox={`0 0 ${W} ${H}`} width="100%"
+                style={{display:"block",cursor:"crosshair",touchAction:"none"}}
+                onClick={handleClick}>
+                {yTicks.map(v=>(
+                  <line key={v} x1={PAD.left} x2={PAD.left+plotW} y1={yOf(v)} y2={yOf(v)} stroke="#1a1a1a" strokeWidth="1"/>
+                ))}
+                {areaPoints&&<polygon points={areaPoints} fill="#c8f72c" fillOpacity="0.07"/>}
+                {points.length>=2&&(
+                  <polyline points={linePoints} fill="none" stroke="#c8f72c" strokeWidth="2"
+                    strokeLinejoin="round" strokeLinecap="round"/>
+                )}
+                {points.map(p=>{
+                  const isSel=selected?.date===p.date;
+                  return(
+                    <g key={p.date}>
+                      {isSel&&<circle cx={xOf(p.idx)} cy={yOf(p.steps)} r="10" fill="#c8f72c" fillOpacity="0.15"/>}
+                      <circle cx={xOf(p.idx)} cy={yOf(p.steps)} r={isSel?5:3}
+                        fill={isSel?"#c8f72c":"#8aaa40"} stroke="#0c0c0c" strokeWidth="1.5"/>
+                    </g>
+                  );
+                })}
+                {selected&&(
+                  <line x1={xOf(selected.idx)} x2={xOf(selected.idx)}
+                    y1={PAD.top} y2={PAD.top+plotH}
+                    stroke="#c8f72c" strokeWidth="1" strokeDasharray="3 3" strokeOpacity="0.5"/>
+                )}
+                {yTicks.map(v=>(
+                  <text key={v} x={PAD.left-5} y={yOf(v)+4} textAnchor="end"
+                    fill="#3a3a3a" fontSize="9" fontFamily="monospace">{fmtSteps(v)}</text>
+                ))}
+                {xLabels.map(({idx,label})=>(
+                  <text key={idx} x={xOf(idx)} y={H-6} textAnchor="middle"
+                    fill="#3a3a3a" fontSize="8" fontFamily="monospace">{label}</text>
+                ))}
+                <line x1={PAD.left} x2={PAD.left} y1={PAD.top} y2={PAD.top+plotH} stroke="#2a2a2a" strokeWidth="1"/>
+                <line x1={PAD.left} x2={PAD.left+plotW} y1={PAD.top+plotH} y2={PAD.top+plotH} stroke="#2a2a2a" strokeWidth="1"/>
+              </svg>
+            </div>
+          ):(
+            <div style={{background:"#0c0c0c",border:"1px solid #1a1a1a",borderRadius:12,padding:"60px 20px",
+              textAlign:"center",color:"#2a2a2a",fontSize:11,letterSpacing:2,textTransform:"uppercase"}}>
+              No step data<br/>in the last 30 days
+            </div>
+          )}
+
+          {points.length>=2&&(()=>{
+            const avg=Math.round(vals.reduce((a,b)=>a+b,0)/vals.length);
+            const best=Math.max(...vals);
+            const diff=vals[vals.length-1]-vals[0];
+            const diffColor=diff>=0?C.green:"#e85d2a";
+            return(
+              <div style={{display:"flex",gap:10,marginTop:14}}>
+                {[
+                  {label:"Avg",value:fmtSteps(avg)},
+                  {label:"Best",value:fmtSteps(best)},
+                  {label:"Trend",value:`${diff>=0?"+":""}${fmtSteps(Math.abs(diff))}`,color:diffColor},
+                ].map(st=>(
+                  <div key={st.label} style={{flex:1,background:"#0c0c0c",border:"1px solid #1a1a1a",borderRadius:8,padding:"10px 8px",textAlign:"center"}}>
+                    <div style={{fontSize:15,fontWeight:700,color:st.color||C.text}}>{st.value}</div>
                     <div style={{fontSize:8,color:"#3a3a3a",letterSpacing:2,textTransform:"uppercase",marginTop:3}}>{st.label}</div>
                   </div>
                 ))}
@@ -1745,8 +1911,8 @@ export default function App(){
               </>
           }
         </div>
-        <FloatBtn label="+ Log Set" onClick={()=>setModal({type:"addSet",mId,eId,sid})} visible={rFabVisible} left/>
-        {session.sets.length>0&&<FloatBtn label="Done ✓" onClick={onDone} visible={rFabVisible} right/>}
+        <FloatBtn label="+ Log Set" onClick={()=>setModal({type:"addSet",mId,eId,sid})} visible={true} left/>
+        {session.sets.length>0&&<FloatBtn label="Done ✓" onClick={onDone} visible={true} right/>}
       </div>
     );
   }
@@ -1786,7 +1952,7 @@ export default function App(){
     const dateStr = d=>`${yr}-${pad(mon+1)}-${pad(d)}`;
 
     return (
-      <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.92)",zIndex:100,display:"flex",flexDirection:"column",...T}}
+      <div style={{position:"fixed",inset:0,background:C.bg,zIndex:100,display:"flex",flexDirection:"column",...T}}
         onClick={()=>setCalOpen(false)}>
         <div style={{background:"#0f0f0f",borderBottom:"1px solid #1a1a1a",padding:"44px 18px 16px",display:"flex",alignItems:"center",gap:12}}
           onClick={e=>e.stopPropagation()}>
@@ -1889,9 +2055,8 @@ export default function App(){
           <button style={mnBtn} onClick={()=>setSidebar(true)}>☰</button>
           <div style={{flex:1,minWidth:0}}>
             <div style={ttl}>GymLog</div>
-            <div style={{...sub,fontSize:11,letterSpacing:1,color:"#555"}}>{activeUser?.name} · Push harder 💪</div>
+            <div style={{...sub,fontSize:11,letterSpacing:1,color:"#555"}}>{activeUser?.name} · Push harder than Yesterday 💪🔥</div>
           </div>
-          <button style={{...mnBtn,fontSize:18}} onClick={()=>setCalOpen(true)}>📅</button>
         </div>
 
         <div ref={scrollRef} style={{flex:1,overflowY:"auto",paddingBottom:110}}>
@@ -1906,6 +2071,60 @@ export default function App(){
               </div>
             ))}
           </div>
+
+          {/* ── Feature carousel ── */}
+          {(()=>{
+            const cards=[
+              {
+                id:"anatomy",
+                icon:"🫀",
+                title:"Human Anatomy",
+                desc:"Interactive muscle map",
+                onClick:()=>setAnatomyOpen(true),
+              },
+              {
+                id:"calendar",
+                icon:"📅",
+                title:"Calendar",
+                desc:"Browse sessions by date",
+                onClick:()=>setCalOpen(true),
+              },
+              {
+                id:"weight",
+                icon:"🏋",
+                title:"Weight Graph",
+                desc:"Last 30 days progress",
+                onClick:()=>setBwOpen(true),
+              },
+              {
+                id:"steps",
+                icon:"👟",
+                title:"Steps Graph",
+                desc:"Daily step count trend",
+                onClick:()=>setStepsOpen(true),
+              },
+            ];
+            return(
+              <div style={{display:"flex",gap:10,padding:"12px 14px",overflowX:"auto",
+                scrollSnapType:"x mandatory",WebkitOverflowScrolling:"touch",
+                msOverflowStyle:"none",scrollbarWidth:"none"}}>
+                {cards.map(card=>(
+                  <div key={card.id}
+                    onClick={card.onClick}
+                    style={{flexShrink:0,width:140,background:"#111",border:"1px solid #1e1e1e",
+                      borderRadius:12,padding:"14px 12px",cursor:"pointer",scrollSnapAlign:"start",
+                      display:"flex",flexDirection:"column",gap:6,
+                      transition:"border-color 0.15s"}}
+                    onMouseEnter={e=>e.currentTarget.style.borderColor="#c8f72c"}
+                    onMouseLeave={e=>e.currentTarget.style.borderColor="#1e1e1e"}>
+                    <span style={{fontSize:28}}>{card.icon}</span>
+                    <div style={{fontSize:12,fontWeight:700,color:C.green,letterSpacing:1}}>{card.title}</div>
+                    <div style={{fontSize:10,color:"#3a3a3a",letterSpacing:0.5,lineHeight:1.4}}>{card.desc}</div>
+                  </div>
+                ))}
+              </div>
+            );
+          })()}
 
           {days.length===0&&<div style={mpt}>No sessions yet<br/>Tap Record Session to start</div>}
           {days.map(({date,sessions})=>{
@@ -1966,7 +2185,7 @@ export default function App(){
           })}
         </div>
 
-        <FloatBtn label="＋  Record Session" onClick={()=>setWizard({step:"muscle",date:new Date().toISOString().slice(0,10)})} visible={fabVisible}/>
+        <FloatBtn label="＋  Record Session" onClick={()=>setWizard({step:"muscle",date:new Date().toISOString().slice(0,10)})} visible={true}/>
       </div>
     );
   }
@@ -2148,7 +2367,7 @@ export default function App(){
             })}
           </div>
         </div>
-        <FloatBtn label="＋  Add Exercise" onClick={()=>setWizard({step:"muscle",date:viewDay})} visible={fabVisible}/>
+        <FloatBtn label="＋  Add Exercise" onClick={()=>setWizard({step:"muscle",date:viewDay})} visible={true}/>
       </div>
     );
   }
@@ -2158,6 +2377,9 @@ export default function App(){
     const {mId,eId}=viewEx||{};
     const muscle=getMuscle(mId);
     const exer  =getEx(mId,eId);
+    // Hooks must come before any early return
+    const [selPt, setSelPt] = useState(null);
+    const exSvgRef = useRef(null);
     // Guard: if data not ready yet, show loading
     if(!mId||!eId||!exer) return (
       <div style={{minHeight:"100vh",display:"flex",flexDirection:"column"}}>
@@ -2170,17 +2392,61 @@ export default function App(){
     );
     const sessions=sortSess(exer.sessions).map(s=>({...s,mId,mName:muscle?.name,eName:exer.name,eId}));
 
-    // ── Sparkline data: max weight per session (chronological) ──
-    const sparkData=[...sessions].reverse().map(s=>{
-      const ws=s.sets.filter(t=>t.weight!=null);
-      return ws.length?Math.max(...ws.map(t=>t.weight)):0;
-    }).filter(v=>v>0);
-    const sparkMin=sparkData.length?Math.min(...sparkData):0;
-    const sparkMax=sparkData.length?Math.max(...sparkData):1;
-    const sparkH=56; const sparkW=280;
-    const toY=v=>sparkH-((v-sparkMin)/(sparkMax-sparkMin||1))*(sparkH-10)-5;
-    const toX=(i,len)=>(i/(Math.max(len-1,1)))*sparkW;
-    const color=getMuscleColor(muscle?.name||"");
+    const last30 = [...sessions].reverse().slice(-30);
+    const graphPts = last30.map((s,i)=>{
+      const ws = s.sets.filter(t=>t.weight!=null);
+      const kg = ws.length ? Math.max(...ws.map(t=>t.weight)) : null;
+      return kg!=null ? {date:s.date, kg, idx:i, total:last30.length} : null;
+    }).filter(Boolean);
+
+    const GW=320, GH=180, GP={top:16,right:16,bottom:40,left:44};
+    const gPlotW=GW-GP.left-GP.right;
+    const gPlotH=GH-GP.top-GP.bottom;
+    const gVals=graphPts.map(p=>p.kg);
+    const gMin=gVals.length?Math.floor(Math.min(...gVals)-1):0;
+    const gMax=gVals.length?Math.ceil(Math.max(...gVals)+1):100;
+    const gRange=gMax-gMin||1;
+    const nPts=Math.max(last30.length-1,1);
+
+    function gX(idx){ return GP.left+(idx/nPts)*gPlotW; }
+    function gY(kg){ return GP.top+gPlotH-((kg-gMin)/gRange)*gPlotH; }
+
+    const gLine=graphPts.map(p=>`${gX(p.idx)},${gY(p.kg)}`).join(" ");
+    const gArea=graphPts.length>=2
+      ?`${gX(graphPts[0].idx)},${GP.top+gPlotH} `+gLine+` ${gX(graphPts[graphPts.length-1].idx)},${GP.top+gPlotH}`
+      :"";
+
+    const gYTicks=(()=>{
+      const rng=gRange; const step=rng<=10?1:rng<=20?2:rng<=50?5:10;
+      const ticks=[];
+      for(let v=Math.ceil(gMin/step)*step;v<=gMax;v+=step) ticks.push(v);
+      return ticks;
+    })();
+
+    const gXLabels=(()=>{
+      if(graphPts.length===0) return [];
+      const labels=[];
+      const showIdxs=graphPts.length<=5
+        ?graphPts.map((_,i)=>i)
+        :[0,Math.floor(graphPts.length*0.25),Math.floor(graphPts.length*0.5),Math.floor(graphPts.length*0.75),graphPts.length-1];
+      [...new Set(showIdxs)].forEach(i=>{
+        if(graphPts[i]) labels.push({idx:graphPts[i].idx, label:new Date(graphPts[i].date).toLocaleDateString("en-US",{month:"short",day:"numeric"})});
+      });
+      return labels;
+    })();
+
+    function handleExGraphClick(e){
+      if(!exSvgRef.current||graphPts.length===0) return;
+      const rect=exSvgRef.current.getBoundingClientRect();
+      const mx=(e.clientX-rect.left)*(GW/rect.width);
+      let best=null,bestDist=Infinity;
+      graphPts.forEach(p=>{
+        const d=Math.abs(gX(p.idx)-mx);
+        if(d<bestDist){bestDist=d;best=p;}
+      });
+      if(best&&bestDist<40) setSelPt(sp=>sp?.date===best.date?null:best);
+      else setSelPt(null);
+    }
 
     return (
       <div style={{minHeight:"100vh",display:"flex",flexDirection:"column"}}>
@@ -2192,38 +2458,97 @@ export default function App(){
           </div>
         </div>
 
-        {/* ── Progress sparkline ── */}
-        {sparkData.length>=2&&(
-          <div style={{background:"#0c0c0c",borderBottom:"1px solid #141414",padding:"12px 14px 14px"}}>
-            <div style={{fontSize:9,color:"#555",letterSpacing:3,textTransform:"uppercase",marginBottom:8}}>Max Weight Progress</div>
-            <div style={{position:"relative",height:sparkH,overflowX:"hidden"}}>
-              <svg width="100%" height={sparkH} viewBox={`0 0 ${sparkW} ${sparkH}`} preserveAspectRatio="none">
-                {/* Filled area */}
-                <defs>
-                  <linearGradient id="spkGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor={color} stopOpacity="0.3"/>
-                    <stop offset="100%" stopColor={color} stopOpacity="0"/>
-                  </linearGradient>
-                </defs>
-                <path
-                  d={`M${toX(0,sparkData.length)},${toY(sparkData[0])} ${sparkData.slice(1).map((_,i)=>`L${toX(i+1,sparkData.length)},${toY(sparkData[i+1])}`).join(" ")} L${toX(sparkData.length-1,sparkData.length)},${sparkH} L0,${sparkH} Z`}
-                  fill="url(#spkGrad)"/>
-                {/* Line */}
-                <polyline
-                  points={sparkData.map((_,i)=>`${toX(i,sparkData.length)},${toY(sparkData[i])}`).join(" ")}
-                  fill="none" stroke={color} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round"/>
-                {/* Dots */}
-                {sparkData.map((v,i)=>(
-                  <circle key={i} cx={toX(i,sparkData.length)} cy={toY(v)} r="3" fill={color}/>
+        {/* ── Progress graph ── */}
+        <div style={{background:"#0c0c0c",borderBottom:"1px solid #141414",padding:"12px 14px 14px",flexShrink:0}}>
+          <div style={{fontSize:9,color:"#3a3a3a",letterSpacing:3,textTransform:"uppercase",marginBottom:8}}>
+            Max Weight · Last {Math.min(sessions.length,30)} Sessions
+          </div>
+
+          {/* Selected point card */}
+          {selPt?(
+            <div style={{background:"#0d1400",border:"1px solid #1e3000",borderRadius:8,padding:"8px 12px",
+              marginBottom:10,display:"flex",alignItems:"center",gap:10}}>
+              <div style={{fontSize:22,fontWeight:700,color:C.green,letterSpacing:-1}}>{selPt.kg}<span style={{fontSize:10,color:"#4a7a00",fontWeight:400}}> kg</span></div>
+              <div>
+                <div style={{fontSize:11,color:C.text,fontWeight:600}}>{new Date(selPt.date).toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric"})}</div>
+                <div style={{fontSize:9,color:"#4a6a00",marginTop:1,letterSpacing:1}}>tap again to deselect</div>
+              </div>
+            </div>
+          ):graphPts.length>0?(
+            <div style={{fontSize:9,color:"#2a2a2a",letterSpacing:1,marginBottom:10,textAlign:"center",textTransform:"uppercase"}}>
+              tap graph to inspect a point
+            </div>
+          ):null}
+
+          {graphPts.length>=2?(
+            <div style={{background:"#090909",border:"1px solid #1a1a1a",borderRadius:10,overflow:"hidden",padding:"6px 0 2px"}}>
+              <svg ref={exSvgRef} viewBox={`0 0 ${GW} ${GH}`} width="100%"
+                style={{display:"block",cursor:"crosshair",touchAction:"none"}}
+                onClick={handleExGraphClick}>
+                {/* Grid */}
+                {gYTicks.map(v=>(
+                  <line key={v} x1={GP.left} x2={GP.left+gPlotW} y1={gY(v)} y2={gY(v)} stroke="#1a1a1a" strokeWidth="1"/>
                 ))}
+                {/* Area */}
+                {gArea&&<polygon points={gArea} fill="#c8f72c" fillOpacity="0.07"/>}
+                {/* Line */}
+                <polyline points={gLine} fill="none" stroke="#c8f72c" strokeWidth="2"
+                  strokeLinejoin="round" strokeLinecap="round"/>
+                {/* Dots */}
+                {graphPts.map(p=>{
+                  const isSel=selPt?.date===p.date;
+                  return(
+                    <g key={p.date}>
+                      {isSel&&<circle cx={gX(p.idx)} cy={gY(p.kg)} r="10" fill="#c8f72c" fillOpacity="0.15"/>}
+                      <circle cx={gX(p.idx)} cy={gY(p.kg)} r={isSel?5:3}
+                        fill={isSel?"#c8f72c":"#8aaa40"} stroke="#090909" strokeWidth="1.5"/>
+                    </g>
+                  );
+                })}
+                {/* Selected vertical line */}
+                {selPt&&<line x1={gX(selPt.idx)} x2={gX(selPt.idx)}
+                  y1={GP.top} y2={GP.top+gPlotH}
+                  stroke="#c8f72c" strokeWidth="1" strokeDasharray="3 3" strokeOpacity="0.5"/>}
+                {/* Y labels */}
+                {gYTicks.map(v=>(
+                  <text key={v} x={GP.left-5} y={gY(v)+4} textAnchor="end"
+                    fill="#3a3a3a" fontSize="9" fontFamily="monospace">{v}</text>
+                ))}
+                {/* X labels */}
+                {gXLabels.map(({idx,label})=>(
+                  <text key={idx} x={gX(idx)} y={GH-6} textAnchor="middle"
+                    fill="#3a3a3a" fontSize="8" fontFamily="monospace">{label}</text>
+                ))}
+                <line x1={GP.left} x2={GP.left} y1={GP.top} y2={GP.top+gPlotH} stroke="#2a2a2a" strokeWidth="1"/>
+                <line x1={GP.left} x2={GP.left+gPlotW} y1={GP.top+gPlotH} y2={GP.top+gPlotH} stroke="#2a2a2a" strokeWidth="1"/>
               </svg>
             </div>
-            <div style={{display:"flex",justifyContent:"space-between",marginTop:4}}>
-              <div style={{fontSize:8,color:"#333",fontFamily:"inherit"}}>{sparkMin}kg</div>
-              <div style={{fontSize:8,color:color,fontWeight:700}}>{sparkMax}kg peak</div>
+          ):sessions.length>0?(
+            <div style={{textAlign:"center",padding:"20px 0",fontSize:9,color:"#2a2a2a",letterSpacing:2,textTransform:"uppercase"}}>
+              Log weight in sets to see progress
             </div>
-          </div>
-        )}
+          ):null}
+
+          {/* Summary strip */}
+          {graphPts.length>=2&&(()=>{
+            const diff=(graphPts[graphPts.length-1].kg-graphPts[0].kg).toFixed(1);
+            const diffColor=parseFloat(diff)>0?C.green:parseFloat(diff)<0?"#e85d2a":C.muted;
+            return(
+              <div style={{display:"flex",gap:8,marginTop:10}}>
+                {[
+                  {label:"Best",value:`${Math.max(...gVals)}kg`},
+                  {label:"Progress",value:`${diff>0?"+":""}${diff}kg`,color:diffColor},
+                  {label:"Sessions",value:graphPts.length},
+                ].map(st=>(
+                  <div key={st.label} style={{flex:1,background:"#0d0d0d",border:"1px solid #1a1a1a",borderRadius:6,padding:"7px 4px",textAlign:"center"}}>
+                    <div style={{fontSize:13,fontWeight:700,color:st.color||C.text}}>{st.value}</div>
+                    <div style={{fontSize:7,color:"#3a3a3a",letterSpacing:2,textTransform:"uppercase",marginTop:2}}>{st.label}</div>
+                  </div>
+                ))}
+              </div>
+            );
+          })()}
+        </div>
 
         <div ref={scrollRef} style={{flex:1,overflowY:"auto",paddingBottom:110}}>
           {sessions.length===0&&<div style={mpt}>No sessions yet<br/>Tap Record Session to start</div>}
@@ -2282,7 +2607,7 @@ export default function App(){
           <div style={sLbl}>Sets</div>
           <SetList sets={session.sets} mId={mId} eId={eId} sid={sid}/>
         </div>
-        <FloatBtn label="+ Log Set" onClick={()=>setModal({type:"addSet",mId,eId,sid})} visible={fabVisible} left/>
+        <FloatBtn label="+ Log Set" onClick={()=>setModal({type:"addSet",mId,eId,sid})} visible={true} left/>
       </div>
     );
   }
@@ -2305,6 +2630,7 @@ export default function App(){
       {sidebar&&<Sidebar/>}
       {anatomyOpen&&<AnatomyModal/>}
       {bwOpen&&<BodyWeightModal onClose={()=>setBwOpen(false)}/>}
+      {stepsOpen&&<StepsGraphModal onClose={()=>setStepsOpen(false)}/>}
       {calOpen&&<CalendarOverlay/>}
 
       <div style={{flex:1,overflow:"hidden",display:"flex",flexDirection:"column"}}>
