@@ -159,6 +159,7 @@ export default function App(){
   const [wizard,  setWizard]  = useState(null);
   const [sidebar, setSidebar] = useState(false);
   const [anatomyOpen, setAnatomyOpen] = useState(false);
+  const [bwOpen, setBwOpen] = useState(false);
   const [modal,   setModal]   = useState(null);
   const [sbOpen,  setSbOpen]  = useState({});
   const [calOpen, setCalOpen] = useState(false);  // calendar overlay
@@ -224,12 +225,13 @@ export default function App(){
       }
     };
     go(); return ()=>h?.remove();
-  },[modal,sidebar,calOpen,anatomyOpen,wizard,screen,viewDay,viewEx]);
+  },[modal,sidebar,calOpen,anatomyOpen,bwOpen,wizard,screen,viewDay,viewEx]);
 
   function handleBack(){
     if(modal){setModal(null);return;}
     if(calOpen){setCalOpen(false);return;}
     if(sidebar){setSidebar(false);return;}
+    if(bwOpen){setBwOpen(false);return;}
     if(anatomyOpen){setAnatomyOpen(false);setScreen("home");return;}
     if(wizard){
       const {step}=wizard;
@@ -1095,9 +1097,22 @@ export default function App(){
 
         {/* Fixed bottom area */}
         <div style={{flexShrink:0,borderTop:"1px solid #1a1a1a",background:"#0f0f0f",padding:"12px 18px 8px"}}>
-          <button style={{...btn(false),display:"block",width:"100%",fontSize:15,padding:"14px",
-            background:"#111",border:"1px solid #1e1e1e",color:"#c8f72c",borderRadius:8,fontWeight:700,letterSpacing:2,cursor:"pointer",...T}}
-            onMouseDown={e=>{e.stopPropagation();setAnatomyOpen(true);}}>🫀 Human Anatomy</button>
+          <div style={{display:"flex",gap:8}}>
+            <button style={{flex:1,background:"#111",border:"1px solid #1e1e1e",color:"#c8f72c",borderRadius:8,
+              fontWeight:700,letterSpacing:1,cursor:"pointer",...T,fontSize:11,padding:"10px 6px",
+              display:"flex",flexDirection:"column",alignItems:"center",gap:4}}
+              onMouseDown={e=>{e.stopPropagation();setAnatomyOpen(true);}}>
+              <span style={{fontSize:20}}>🫀</span>
+              <span>Anatomy</span>
+            </button>
+            <button style={{flex:1,background:"#111",border:"1px solid #1e1e1e",color:"#c8f72c",borderRadius:8,
+              fontWeight:700,letterSpacing:1,cursor:"pointer",...T,fontSize:11,padding:"10px 6px",
+              display:"flex",flexDirection:"column",alignItems:"center",gap:4}}
+              onMouseDown={e=>{e.stopPropagation();setBwOpen(true);}}>
+              <span style={{fontSize:20}}>🏋</span>
+              <span>Weight Graph</span>
+            </button>
+          </div>
           <button style={{...btn(true),display:"block",width:"100%",marginTop:8,fontSize:15,padding:"14px"}}
             onMouseDown={e=>{e.stopPropagation();setModal({type:"addMuscle"});}}>+ Add Muscle Group</button>
         </div>
@@ -1112,7 +1127,199 @@ export default function App(){
   }
 
 
+
+  // ── BODY WEIGHT MODAL ─────────────────────────────────────
+  function BodyWeightModal({onClose}){
+    const [selected, setSelected] = useState(null); // {date, kg}
+    const svgRef = useRef(null);
+
+    // Build last-30-days data
+    const today = new Date();
+    const points = [];
+    for(let i=29; i>=0; i--){
+      const d = new Date(today);
+      d.setDate(today.getDate()-i);
+      const iso = d.toISOString().slice(0,10);
+      const kg = dailyWeights[iso];
+      if(kg!=null) points.push({date:iso, kg, idx:29-i});
+    }
+
+    // X/Y layout
+    const W=320, H=180, PAD={top:16,right:16,bottom:40,left:44};
+    const plotW=W-PAD.left-PAD.right;
+    const plotH=H-PAD.top-PAD.bottom;
+
+    const kgVals = points.map(p=>p.kg);
+    const minKg = kgVals.length ? Math.floor(Math.min(...kgVals)-1) : 50;
+    const maxKg = kgVals.length ? Math.ceil(Math.max(...kgVals)+1) : 100;
+    const rangeKg = maxKg - minKg || 1;
+
+    function xOf(idx){ return PAD.left + (idx/29)*plotW; }
+    function yOf(kg){ return PAD.top + plotH - ((kg-minKg)/rangeKg)*plotH; }
+
+    // Build SVG polyline
+    const linePoints = points.map(p=>`${xOf(p.idx)},${yOf(p.kg)}`).join(" ");
+    const areaPoints = points.length>=2
+      ? `${xOf(points[0].idx)},${PAD.top+plotH} `+linePoints+` ${xOf(points[points.length-1].idx)},${PAD.top+plotH}`
+      : "";
+
+    // Y-axis ticks
+    const yTicks = [];
+    const step = rangeKg<=10?1:rangeKg<=20?2:5;
+    for(let v=Math.ceil(minKg/step)*step; v<=maxKg; v+=step){
+      yTicks.push(v);
+    }
+
+    // X-axis: show ~5 evenly-spaced dates
+    const xLabels=[];
+    const labelIdxs=[0,7,14,21,29];
+    labelIdxs.forEach(i=>{
+      const d=new Date(today);
+      d.setDate(today.getDate()-(29-i));
+      xLabels.push({idx:i, label:d.toLocaleDateString("en-US",{month:"short",day:"numeric"})});
+    });
+
+    // Click on SVG → find nearest point
+    function handleSvgClick(e){
+      if(!svgRef.current||points.length===0) return;
+      const rect=svgRef.current.getBoundingClientRect();
+      const mx=(e.clientX-rect.left)*(W/rect.width);
+      // Find nearest point by x distance
+      let best=null, bestDist=Infinity;
+      points.forEach(p=>{
+        const d=Math.abs(xOf(p.idx)-mx);
+        if(d<bestDist){bestDist=d;best=p;}
+      });
+      if(best&&bestDist<40){
+        setSelected(sel=>sel?.date===best.date?null:best);
+      } else {
+        setSelected(null);
+      }
+    }
+
+    const shortDate=iso=>new Date(iso).toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric"});
+
+    return(
+      <div style={{position:"fixed",inset:0,zIndex:60,background:C.bg,display:"flex",flexDirection:"column"}}>
+        {/* Header */}
+        <div style={{background:"#0f0f0f",borderBottom:"1px solid #1a1a1a",padding:"44px 18px 16px",display:"flex",alignItems:"center",gap:12,flexShrink:0}}>
+          <button style={{background:"none",border:"1px solid #2a2a2a",color:"#777",borderRadius:6,padding:"10px 14px",cursor:"pointer",fontSize:12,...T,letterSpacing:1,flexShrink:0}}
+            onClick={onClose}>← Back</button>
+          <div style={{fontSize:16,fontWeight:700,letterSpacing:3,textTransform:"uppercase",color:C.text}}>Body Weight</div>
+        </div>
+
+        <div style={{flex:1,overflowY:"auto",padding:"20px 18px 40px"}}>
+
+          {/* Subtitle */}
+          <div style={{fontSize:10,color:"#3a3a3a",letterSpacing:2,textTransform:"uppercase",marginBottom:16}}>Last 30 days</div>
+
+          {/* Selected point info */}
+          {selected?(
+            <div style={{background:"#0d1400",border:"1px solid #1e3000",borderRadius:10,padding:"12px 16px",marginBottom:16,display:"flex",alignItems:"center",gap:12}}>
+              <div style={{fontSize:28,fontWeight:700,color:C.green,letterSpacing:-1}}>{selected.kg}<span style={{fontSize:12,color:"#4a7a00",fontWeight:400}}> kg</span></div>
+              <div>
+                <div style={{fontSize:12,color:C.text,fontWeight:600}}>{shortDate(selected.date)}</div>
+                <div style={{fontSize:10,color:"#4a6a00",marginTop:2,letterSpacing:1}}>tap again to deselect</div>
+              </div>
+            </div>
+          ):(
+            <div style={{background:"#111",border:"1px solid #1a1a1a",borderRadius:10,padding:"12px 16px",marginBottom:16,
+              fontSize:10,color:"#3a3a3a",letterSpacing:1,textTransform:"uppercase",textAlign:"center"}}>
+              {points.length>0?"Tap graph to inspect a point":"No data yet — log weight from any day's view"}
+            </div>
+          )}
+
+          {/* Graph */}
+          {points.length>0?(
+            <div style={{background:"#0c0c0c",border:"1px solid #1a1a1a",borderRadius:12,overflow:"hidden",padding:"8px 0 4px"}}>
+              <svg
+                ref={svgRef}
+                viewBox={`0 0 ${W} ${H}`}
+                width="100%"
+                style={{display:"block",cursor:"crosshair",touchAction:"none"}}
+                onClick={handleSvgClick}
+              >
+                {/* Grid lines */}
+                {yTicks.map(v=>(
+                  <line key={v} x1={PAD.left} x2={PAD.left+plotW} y1={yOf(v)} y2={yOf(v)}
+                    stroke="#1a1a1a" strokeWidth="1"/>
+                ))}
+                {/* Area fill */}
+                {areaPoints&&(
+                  <polygon points={areaPoints} fill="#c8f72c" fillOpacity="0.07"/>
+                )}
+                {/* Line */}
+                {points.length>=2&&(
+                  <polyline points={linePoints} fill="none" stroke="#c8f72c" strokeWidth="2"
+                    strokeLinejoin="round" strokeLinecap="round"/>
+                )}
+                {/* Dots */}
+                {points.map(p=>{
+                  const isSel=selected?.date===p.date;
+                  return(
+                    <g key={p.date}>
+                      {isSel&&<circle cx={xOf(p.idx)} cy={yOf(p.kg)} r="10" fill="#c8f72c" fillOpacity="0.15"/>}
+                      <circle cx={xOf(p.idx)} cy={yOf(p.kg)} r={isSel?5:3}
+                        fill={isSel?"#c8f72c":"#8aaa40"} stroke="#0c0c0c" strokeWidth="1.5"/>
+                    </g>
+                  );
+                })}
+                {/* Selected vertical line */}
+                {selected&&(
+                  <line x1={xOf(selected.idx)} x2={xOf(selected.idx)}
+                    y1={PAD.top} y2={PAD.top+plotH}
+                    stroke="#c8f72c" strokeWidth="1" strokeDasharray="3 3" strokeOpacity="0.5"/>
+                )}
+                {/* Y-axis labels */}
+                {yTicks.map(v=>(
+                  <text key={v} x={PAD.left-5} y={yOf(v)+4} textAnchor="end"
+                    fill="#3a3a3a" fontSize="9" fontFamily="monospace">{v}</text>
+                ))}
+                {/* X-axis labels */}
+                {xLabels.map(({idx,label})=>(
+                  <text key={idx} x={xOf(idx)} y={H-6} textAnchor="middle"
+                    fill="#3a3a3a" fontSize="8" fontFamily="monospace">{label}</text>
+                ))}
+                {/* Y axis line */}
+                <line x1={PAD.left} x2={PAD.left} y1={PAD.top} y2={PAD.top+plotH} stroke="#2a2a2a" strokeWidth="1"/>
+                {/* X axis line */}
+                <line x1={PAD.left} x2={PAD.left+plotW} y1={PAD.top+plotH} y2={PAD.top+plotH} stroke="#2a2a2a" strokeWidth="1"/>
+              </svg>
+            </div>
+          ):(
+            <div style={{background:"#0c0c0c",border:"1px solid #1a1a1a",borderRadius:12,padding:"60px 20px",
+              textAlign:"center",color:"#2a2a2a",fontSize:11,letterSpacing:2,textTransform:"uppercase"}}>
+              No weight data<br/>in the last 30 days
+            </div>
+          )}
+
+          {/* Summary stats */}
+          {points.length>=2&&(()=>{
+            const avg=(points.reduce((a,p)=>a+p.kg,0)/points.length).toFixed(1);
+            const diff=(points[points.length-1].kg-points[0].kg).toFixed(1);
+            const diffColor=diff<0?C.green:diff>0?"#e85d2a":C.muted;
+            return(
+              <div style={{display:"flex",gap:10,marginTop:14}}>
+                {[
+                  {label:"Avg",value:`${avg} kg`},
+                  {label:"Change",value:`${diff>0?"+":""}${diff} kg`,color:diffColor},
+                  {label:"Entries",value:points.length},
+                ].map(st=>(
+                  <div key={st.label} style={{flex:1,background:"#0c0c0c",border:"1px solid #1a1a1a",borderRadius:8,padding:"10px 8px",textAlign:"center"}}>
+                    <div style={{fontSize:15,fontWeight:700,color:st.color||C.text,letterSpacing:-0.5}}>{st.value}</div>
+                    <div style={{fontSize:8,color:"#3a3a3a",letterSpacing:2,textTransform:"uppercase",marginTop:3}}>{st.label}</div>
+                  </div>
+                ))}
+              </div>
+            );
+          })()}
+        </div>
+      </div>
+    );
+  }
+
   // ── ANATOMY MODAL ─────────────────────────────────────────
+
   function AnatomyModal(){
 
 
@@ -1725,12 +1932,10 @@ export default function App(){
                 {visible.map((s,i)=>{
                   const maxW=s.sets.filter(t=>t.weight!=null).length?Math.max(...s.sets.filter(t=>t.weight!=null).map(t=>t.weight)):0;
                   const vol=s.sets.filter(t=>t.weight!=null).reduce((a,t)=>a+t.weight*t.reps,0);
-                  const color=getMuscleColor(s.mName);
                   return(
                     <div key={s.id} style={{display:"flex",alignItems:"center",gap:8,padding:"8px 14px",
-                      borderTop:i>0?"1px solid #111":"none",
-                      borderLeft:`3px solid ${color}22`}}>
-                      <MuscleIcon muscle={s.mName} size={26} showColor/>
+                      borderTop:i>0?"1px solid #111":"none"}}>
+                      <MuscleIcon muscle={s.mName} size={26}/>
                       <div style={{flex:1,minWidth:0}}>
                         <div style={{fontSize:12,fontWeight:600,color:"#c0c0c0",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{s.eName}</div>
                         <div style={{fontSize:10,color:C.muted,marginTop:1}}>
@@ -1877,15 +2082,13 @@ export default function App(){
               const isDragging=dragging===i;
               const isOver=dragOver===i&&dragging!==null&&dragging!==i;
               const isExpanded=expandedDay===s.id;
-              const color=getMuscleColor(s.mName);
               return(
                 <div key={s.id} ref={el=>rowRefs.current[i]=el}
                   style={{...crd,flexDirection:"column",alignItems:"stretch",padding:0,overflow:"hidden",
                     opacity:isDragging?0.35:1,
-                    borderColor:isOver?C.green:isExpanded?color+"66":C.border,
+                    borderColor:isOver?C.green:C.border,
                     transform:isOver?"translateY(-2px)":"translateY(0)",
                     transition:"opacity 0.15s,border-color 0.1s,transform 0.1s",
-                    borderLeft:`3px solid ${color}44`,
                   }}>
                   {/* Card header row */}
                   <div style={{display:"flex",alignItems:"center",padding:"14px 14px 14px 10px"}}>
@@ -1896,7 +2099,7 @@ export default function App(){
                       onMouseDown={e=>e.stopPropagation()}>⠿</span>
                     <div style={{flex:1,minWidth:0,display:"flex",alignItems:"center",gap:12,cursor:"pointer"}}
                       onClick={()=>{ prevScreen.current="day"; setViewSid({mId:s.mId,eId:s.eId,sid:s.id}); setScreen("exercise"); }}>
-                      <MuscleIcon muscle={s.mName} size={38} showColor/>
+                      <MuscleIcon muscle={s.mName} size={38}/>
                       <div style={{flex:1,minWidth:0}}>
                         <div style={{fontWeight:600,fontSize:14}}>{s.eName}</div>
                         <div style={{fontSize:11,color:C.muted,marginTop:3}}>
@@ -1907,10 +2110,10 @@ export default function App(){
                       </div>
                     </div>
                     {/* Expand toggle */}
-                    <button style={{...dBtn,fontSize:13,color:isExpanded?color:"#2a2a2a",padding:"4px 6px"}}
+                    <button style={{...dBtn,fontSize:13,color:"#555",padding:"4px 6px"}}
                       onClick={e=>{e.stopPropagation();setExpandedDay(isExpanded?null:s.id);}}
-                      onMouseEnter={ev=>ev.currentTarget.style.color=color}
-                      onMouseLeave={ev=>ev.currentTarget.style.color=isExpanded?color:"#2a2a2a"}>
+                      onMouseEnter={ev=>ev.currentTarget.style.color=C.text}
+                      onMouseLeave={ev=>ev.currentTarget.style.color=isExpanded?C.text:"#2a2a2a"}>
                       {isExpanded?"▲":"▼"}
                     </button>
                     <button style={dBtn}
@@ -1927,8 +2130,8 @@ export default function App(){
                           {t.type==="super"
                             ?<span style={{fontSize:12,color:"#888"}}>Super · {t.superSets?.length||0} ex</span>
                             :<>
-                              {t.weight!=null&&<><span style={{fontSize:14,fontWeight:700,color:color}}>{t.weight}</span><span style={{fontSize:9,color:C.dim}}>kg ×</span></>}
-                              <span style={{fontSize:14,fontWeight:700,color:color}}>{t.reps}</span>
+                              {t.weight!=null&&<><span style={{fontSize:14,fontWeight:700,color:C.text}}>{t.weight}</span><span style={{fontSize:9,color:C.dim}}>kg ×</span></>}
+                              <span style={{fontSize:14,fontWeight:700,color:C.text}}>{t.reps}</span>
                               <span style={{fontSize:9,color:C.dim}}>reps</span>
                             </>
                           }
@@ -2101,6 +2304,7 @@ export default function App(){
 
       {sidebar&&<Sidebar/>}
       {anatomyOpen&&<AnatomyModal/>}
+      {bwOpen&&<BodyWeightModal onClose={()=>setBwOpen(false)}/>}
       {calOpen&&<CalendarOverlay/>}
 
       <div style={{flex:1,overflow:"hidden",display:"flex",flexDirection:"column"}}>
