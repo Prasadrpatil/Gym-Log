@@ -144,6 +144,17 @@ npx cap add android 2>/dev/null || true
 log "Syncing assets to Android..."
 npx cap sync android
 
+# Patch AndroidManifest.xml — add CAMERA permission for QR scanning
+MANIFEST="$APP_DIR/android/app/src/main/AndroidManifest.xml"
+if [ -f "$MANIFEST" ]; then
+  if ! grep -q "android.permission.CAMERA" "$MANIFEST"; then
+    sed -i 's|<uses-permission android:name="android.permission.INTERNET"|<uses-permission android:name="android.permission.CAMERA"/>\n    <uses-permission android:name="android.permission.INTERNET"|' "$MANIFEST"
+    success "CAMERA permission added to AndroidManifest.xml"
+  else
+    success "CAMERA permission already present"
+  fi
+fi
+
 # Configure gradle for Java 21
 GRADLE_PROPS="$APP_DIR/android/gradle.properties"
 sed -i '/^org.gradle.java.home/d' "$GRADLE_PROPS" 2>/dev/null || true

@@ -38,14 +38,62 @@ function getMuscleColor(name=""){
 function uid(){ return Math.random().toString(36).slice(2,10)+Date.now().toString(36); }
 function fmtDate(iso){ return new Date(iso).toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric",year:"numeric"}); }
 
+// ── Exercise data ─────────────────────────────────────────────
+function makeExercises(names){ return names.map((n,i)=>({id:`e_${n.replace(/\s+/g,"_").toLowerCase()}`,name:n,sessions:[]})); }
+
 const DEFAULT_MUSCLES=[
-  {id:"m1",name:"Chest",   exercises:[{id:"e1",name:"Bench Press"},{id:"e2",name:"Incline Press"},{id:"e3",name:"Cable Fly"}]},
-  {id:"m2",name:"Back",    exercises:[{id:"e4",name:"Pull-ups"},{id:"e5",name:"Barbell Row"},{id:"e6",name:"Lat Pulldown"}]},
-  {id:"m3",name:"Legs",    exercises:[{id:"e7",name:"Squat"},{id:"e8",name:"Leg Press"},{id:"e9",name:"Romanian Deadlift"}]},
-  {id:"m4",name:"Shoulders",exercises:[{id:"e10",name:"Overhead Press"},{id:"e11",name:"Lateral Raise"},{id:"e12",name:"Face Pull"}]},
-  {id:"m5",name:"Biceps",  exercises:[{id:"e13",name:"Barbell Curl"},{id:"e14",name:"Hammer Curl"}]},
-  {id:"m6",name:"Triceps", exercises:[{id:"e15",name:"Tricep Pushdown"},{id:"e16",name:"Skull Crusher"}]},
-  {id:"m7",name:"Abs",     exercises:[{id:"e17",name:"Plank"},{id:"e18",name:"Cable Crunch"}]},
+  {id:"m1",name:"Chest", exercises:makeExercises([
+    "Barbell Bench Press","Incline Barbell Bench Press","Decline Barbell Bench Press",
+    "Reverse Grip Bench Press","Close Grip Bench Press",
+    "Dumbbell Bench Press","Incline Dumbbell Press","Decline Dumbbell Press",
+    "Dumbbell Fly","Incline Dumbbell Fly","Decline Dumbbell Fly","Dumbbell Pullover",
+    "Smith Machine Bench Press","Smith Machine Incline Press","Smith Machine Decline Press",
+    "Cable Fly (High to Low)","Cable Fly (Low to High)","Cable Fly (Mid)",
+    "Pec Deck Machine","Chest Press Machine","Plate Loaded Chest Press",
+    "Push-ups","Wide Push-ups","Decline Push-ups","Weighted Push-ups","Chest Dips",
+  ])},
+  {id:"m2",name:"Back", exercises:makeExercises([
+    "Deadlift","Romanian Deadlift","Stiff Leg Deadlift","Barbell Row","Pendlay Row",
+    "Rack Pull","Meadows Row",
+    "Single Arm Dumbbell Row","Dumbbell Row","Incline Bench Dumbbell Row",
+    "Smith Machine Row",
+    "Lat Pulldown","Wide Grip Pulldown","Close Grip Pulldown","Reverse Grip Pulldown",
+    "Seated Cable Row","Straight Arm Pulldown","Face Pull",
+    "Pull-ups","Weighted Pull-ups","Chin-ups","Inverted Rows",
+  ])},
+  {id:"m3",name:"Shoulders", exercises:makeExercises([
+    "Barbell Overhead Press","Seated Barbell Press","Push Press","Behind the Neck Press","Upright Row",
+    "Dumbbell Shoulder Press","Arnold Press","Dumbbell Lateral Raise","Dumbbell Front Raise",
+    "Rear Delt Fly","Dumbbell Shrugs",
+    "Smith Machine Shoulder Press","Smith Machine Upright Row","Smith Machine Shrugs",
+    "Cable Lateral Raise","Cable Front Raise","Cable Rear Delt Fly",
+    "Machine Shoulder Press","Machine Lateral Raise","Reverse Pec Deck",
+  ])},
+  {id:"m4",name:"Biceps", exercises:makeExercises([
+    "Barbell Curl","EZ Bar Curl","Reverse Curl",
+    "Alternating Dumbbell Curl","Hammer Curl","Incline Dumbbell Curl",
+    "Concentration Curl","Zottman Curl",
+    "Cable Curl","Rope Cable Curl","Preacher Curl Machine","Cable Single Arm Curl",
+  ])},
+  {id:"m5",name:"Triceps", exercises:makeExercises([
+    "Close Grip Bench Press","Skull Crushers","JM Press",
+    "Overhead Dumbbell Extension","Seated Overhead Extension","Dumbbell Skull Crushers","Tricep Kickbacks",
+    "Cable Pushdown","Rope Pushdown","Reverse Grip Pushdown","Cable Overhead Extension","Single Arm Pushdown",
+    "Bench Dips","Parallel Bar Dips","Weighted Dips",
+  ])},
+  {id:"m6",name:"Legs", exercises:makeExercises([
+    "Barbell Squat","Front Squat","Romanian Deadlift","Stiff Leg Deadlift","Good Mornings","Barbell Hip Thrust",
+    "Dumbbell Squat","Goblet Squat","Walking Lunges","Reverse Lunges","Bulgarian Split Squat","Step Ups",
+    "Smith Machine Squat","Smith Machine Lunges","Smith Machine Hip Thrust",
+    "Leg Press","Hack Squat","Leg Extension","Leg Curl (Lying)","Leg Curl (Seated)",
+    "Standing Calf Raise","Seated Calf Raise","Leg Press Calf Raise","Donkey Calf Raise",
+  ])},
+  {id:"m7",name:"Abs", exercises:makeExercises([
+    "Crunches","Weighted Crunch","Cable Crunch","Decline Sit-ups",
+    "Hanging Leg Raise","Hanging Knee Raise","Reverse Crunch",
+    "Russian Twist","Weighted Russian Twist",
+    "Plank","Side Plank","Ab Wheel Rollout","V-Ups","Toe Touches","Mountain Climbers",
+  ])},
 ].map(m=>({...m,lastEdited:Date.now(),exercises:m.exercises.map(e=>({...e,sessions:[]}))}));
 
 function initData(){
@@ -150,6 +198,53 @@ function useScrollVisible(containerRef){
   return visible;
 }
 
+
+// ── LOCK SYSTEM ──────────────────────────────────────────────
+const LOCK_KEY = "gymlog/lock";
+
+// ── Shared secret — must match KeyGen exactly ─────────────────
+// This is what prevents anyone forging their own tokens.
+// Change this string in BOTH apps if you want to rotate the secret.
+const GYMLOG_SECRET = "GymLog#Prasad@2026$Unlock!Secret^Key";
+
+// ── djb2-HMAC: fast, no async, works in any WebView ──────────
+// Not cryptographic-grade but strong enough to prevent casual forgery
+// since the secret is compiled into the APK.
+function hmacSign(message) {
+  const key = GYMLOG_SECRET;
+  // Inner hash: hash(key + message)
+  function djb2(s) {
+    let h = 5381;
+    for (let i = 0; i < s.length; i++) {
+      h = Math.imul(h, 33) ^ s.charCodeAt(i);
+    }
+    return (h >>> 0).toString(16).padStart(8, "0");
+  }
+  // Two-pass to simulate HMAC inner/outer
+  const inner = djb2(key + message);
+  const outer = djb2(message + key + inner);
+  // 16-char hex signature
+  return (inner + outer).toUpperCase();
+}
+
+function getUnlockExp() {
+  try {
+    const raw = localStorage.getItem(LOCK_KEY);
+    if (!raw) return null;
+    const { exp } = JSON.parse(raw);
+    return exp || null;
+  } catch { return null; }
+}
+
+function saveUnlockExp(exp) {
+  try { localStorage.setItem(LOCK_KEY, JSON.stringify({ exp })); } catch {}
+}
+
+function isUnlocked() {
+  const exp = getUnlockExp();
+  return exp ? new Date(exp) > new Date() : false;
+}
+
 export default function App(){
   const [data,    setData]    = useState(initData);
   const [screen,  setScreen]  = useState("home");
@@ -165,6 +260,22 @@ export default function App(){
   const [sbOpen,  setSbOpen]  = useState({});
   const [calOpen, setCalOpen] = useState(false);  // calendar overlay
   const [expandedDay, setExpandedDay] = useState(null); // sid of inline-expanded exercise
+  // ── Lock state ──────────────────────────────────────────
+  const [locked, setLocked] = useState(() => !isUnlocked());
+
+  function doUnlock(exp) {
+    saveUnlockExp(exp);
+    setLocked(false);
+  }
+
+  // Re-lock when expiry passes (check every minute)
+  useEffect(() => {
+    const id = setInterval(() => {
+      if (!isUnlocked()) setLocked(true);
+    }, 60000);
+    return () => clearInterval(id);
+  }, []);
+
   const sideRef    = useRef(null);
   const sideSwipeRef = useRef(null);
   const scrollRef  = useRef(null);  // main scroll container for screens
@@ -2612,7 +2723,252 @@ export default function App(){
     );
   }
 
+  // ── LOCK SCREEN ──────────────────────────────────────────
+  // Token format: GYMLOG|CODE:XXXX-XXXX-XXXX|EXP:1710000000000|SIG:XXXXXXXXXXXXXXXX
+  // SIG = hmacSign("GYMLOG|CODE:...|EXP:...") — prevents forged tokens
+  function parseToken(raw) {
+    const s = (raw || "").trim();
+    if (!s.startsWith("GYMLOG|")) return null;
+    const codeMatch = s.match(/CODE:([A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4})/);
+    const expMatch  = s.match(/EXP:(\d+)/);
+    const sigMatch  = s.match(/SIG:([A-F0-9]{16})/);
+    if (!codeMatch || !expMatch || !sigMatch) return null;
+    const expMs = parseInt(expMatch[1], 10);
+    if (isNaN(expMs)) return null;
+    // Reconstruct the signed payload (everything before |SIG:)
+    const sigIdx   = s.lastIndexOf("|SIG:");
+    const payload  = s.slice(0, sigIdx);
+    const expected = hmacSign(payload);
+    if (sigMatch[1] !== expected) return null; // forged token
+    return { code: codeMatch[1], expMs };
+  }
+
+  function LockScreen() {
+    const [tab,      setTab]    = useState("code");
+    const [input,    setInput]  = useState("");
+    const [err,      setErr]    = useState(null);
+    const [scanning, setScanning] = useState(false);
+    const [jsqrReady, setJsqrReady] = useState(!!window.jsQR);
+    const videoRef   = useRef(null);
+    const streamRef  = useRef(null);
+    const timerRef   = useRef(null);
+    const canvasRef  = useRef(document.createElement("canvas"));
+
+    // Load jsQR once
+    useEffect(() => {
+      if (window.jsQR) { setJsqrReady(true); return; }
+      const s = document.createElement("script");
+      s.src = "https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js";
+      s.onload = () => setJsqrReady(true);
+      document.head.appendChild(s);
+      return () => { stopScan(); };
+    }, []);
+
+    function tryUnlock(token) {
+      const parsed = parseToken(token);
+      if (!parsed) { setErr("Invalid code. Make sure you copied the full code from KeyGen."); return; }
+      if (parsed.expMs <= Date.now()) { setErr("This code has expired. Generate a new one in KeyGen."); return; }
+      doUnlock(new Date(parsed.expMs).toISOString());
+    }
+
+    function tryCode() {
+      tryUnlock(input);
+    }
+
+    function stopScan() {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(t => t.stop());
+        streamRef.current = null;
+      }
+      setScanning(false);
+    }
+
+    async function startScan() {
+      setErr(null);
+      setScanning(true);
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal:"environment" }, width:{ideal:1280}, height:{ideal:720} }
+        });
+        streamRef.current = stream;
+        await new Promise(r => setTimeout(r, 150)); // wait for video element
+        const video = videoRef.current;
+        if (!video) { stopScan(); return; }
+        video.srcObject = stream;
+        video.setAttribute("playsinline","true");
+        video.muted = true;
+        await video.play();
+
+        timerRef.current = setInterval(() => {
+          if (!videoRef.current || !streamRef.current) return;
+          const v = videoRef.current;
+          if (v.readyState < v.HAVE_ENOUGH_DATA || !v.videoWidth) return;
+
+          const canvas = canvasRef.current;
+          // Decode at 400px wide — good balance of speed and accuracy
+          const scale = Math.min(1, 400 / v.videoWidth);
+          canvas.width  = Math.round(v.videoWidth  * scale);
+          canvas.height = Math.round(v.videoHeight * scale);
+          const ctx = canvas.getContext("2d");
+          ctx.drawImage(v, 0, 0, canvas.width, canvas.height);
+
+          if (!window.jsQR) return;
+          const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+          const qr  = window.jsQR(img.data, img.width, img.height, { inversionAttempts:"dontInvert" });
+          if (qr?.data) {
+            stopScan();
+            tryUnlock(qr.data);
+          }
+        }, 200); // scan 5× per second
+
+      } catch(e) {
+        const denied = e.name==="NotAllowedError" || e.name==="PermissionDeniedError";
+        setErr(denied
+          ? "Camera denied. Go to Android Settings → Apps → GymLog → Permissions → Camera → Allow."
+          : `Camera error: ${e.message||e.name}`);
+        setScanning(false);
+      }
+    }
+
+    const inp2 = {
+      background:"#0d0d0d", border:"1px solid #252525", borderRadius:10,
+      color:C.text, padding:"14px", fontSize:13, ...T, outline:"none",
+      width:"100%", textAlign:"center",
+    };
+
+    const exp = getUnlockExp();
+    const expDt = exp ? new Date(exp) : null;
+    const stillValid = expDt && expDt > new Date();
+
+    return (
+      <div style={{height:"100vh",background:C.bg,color:C.text,...T,fontSize:14,
+        display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",
+        padding:"0 24px",overflowY:"auto"}}>
+        <style>{`input:focus{border-color:#c8f72c!important;outline:none;}`}</style>
+
+        <div style={{marginBottom:28,textAlign:"center"}}>
+          <div style={{fontSize:44,marginBottom:10}}>🔒</div>
+          <div style={{fontSize:22,fontWeight:700,color:C.green,letterSpacing:3}}>GymLog</div>
+          <div style={{fontSize:10,color:"#3a3a3a",letterSpacing:2,marginTop:6,textTransform:"uppercase"}}>
+            Enter access code to continue
+          </div>
+        </div>
+
+        {/* Tabs */}
+        <div style={{display:"flex",marginBottom:18,background:"#111",
+          border:"1px solid #1e1e1e",borderRadius:10,overflow:"hidden",width:"100%",maxWidth:320}}>
+          {[["code","📋 Code"],["qr","📷 Scan QR"]].map(([t,label])=>(
+            <button key={t} onClick={()=>{setTab(t);setErr(null);if(t!=="qr")stopScan();}}
+              style={{flex:1,padding:"12px",border:"none",cursor:"pointer",...T,
+                fontSize:11,fontWeight:700,letterSpacing:1,textTransform:"uppercase",
+                background:tab===t?C.green:"transparent",
+                color:tab===t?"#000":"#555"}}>
+              {label}
+            </button>
+          ))}
+        </div>
+
+        <div style={{width:"100%",maxWidth:320}}>
+          {tab==="code"?(
+            <>
+              <div style={{position:"relative"}}>
+                <input
+                  style={{...inp2,letterSpacing:input.trim().length>0?6:1,
+                    fontSize:input.trim().length>0?18:13,
+                    textAlign:"center",fontWeight:input.trim().length>0?700:"normal"}}
+                  type="password"
+                  placeholder="Paste access code"
+                  value={input}
+                  onChange={e=>{ setInput(e.target.value); setErr(null); }}
+                  onKeyDown={e=>{ if(e.key==="Enter") tryCode(); }}
+                  autoCorrect="off"
+                  autoCapitalize="none"
+                  autoComplete="new-password"
+                  spellCheck="false"
+                />
+                {input.length>0&&(
+                  <button onClick={()=>{setInput("");setErr(null);}}
+                    style={{position:"absolute",right:12,top:"50%",transform:"translateY(-50%)",
+                      background:"none",border:"none",color:"#3a3a3a",fontSize:14,cursor:"pointer",...T,
+                      padding:"4px"}}>
+                    ✕
+                  </button>
+                )}
+              </div>
+              <button onClick={tryCode}
+                style={{width:"100%",padding:"15px",marginTop:10,borderRadius:10,border:"none",
+                  background:input.trim().length>5?C.green:"#181818",
+                  color:input.trim().length>5?"#000":"#3a3a3a",
+                  fontSize:13,fontWeight:700,letterSpacing:2,
+                  cursor:"pointer",textTransform:"uppercase",...T}}>
+                Unlock GymLog
+              </button>
+            </>
+          ):(
+            <>
+              {!scanning?(
+                <button onClick={startScan}
+                  style={{width:"100%",padding:"28px 20px",borderRadius:12,
+                    border:`2px dashed ${jsqrReady?"#2a2a2a":"#1a1a1a"}`,
+                    background:"#0d0d0d",color:jsqrReady?"#666":"#333",
+                    fontSize:12,cursor:"pointer",...T,
+                    display:"flex",flexDirection:"column",alignItems:"center",gap:10}}>
+                  <span style={{fontSize:36}}>📷</span>
+                  <span>{jsqrReady?"Tap to scan QR code":"Loading scanner..."}</span>
+                  <span style={{fontSize:9,color:"#2a2a2a"}}>Point camera at QR from KeyGen app</span>
+                </button>
+              ):(
+                <div style={{position:"relative",borderRadius:12,overflow:"hidden",
+                  border:"2px solid #c8f72c",aspectRatio:"1",background:"#000"}}>
+                  <video ref={videoRef}
+                    style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}}
+                    playsInline muted autoPlay/>
+                  {/* Aiming reticle */}
+                  <div style={{position:"absolute",inset:0,display:"flex",
+                    alignItems:"center",justifyContent:"center",pointerEvents:"none"}}>
+                    <div style={{width:"55%",height:"55%",border:"2px solid #c8f72c",
+                      borderRadius:8,boxShadow:"0 0 0 9999px rgba(0,0,0,0.45)"}}/>
+                  </div>
+                  <button onClick={stopScan}
+                    style={{position:"absolute",top:8,right:8,background:"rgba(0,0,0,0.75)",
+                      border:"none",color:"#fff",borderRadius:6,padding:"6px 10px",
+                      cursor:"pointer",...T,fontSize:11}}>
+                    ✕
+                  </button>
+                  <div style={{position:"absolute",bottom:8,left:0,right:0,
+                    textAlign:"center",fontSize:9,color:"rgba(200,247,44,0.7)",letterSpacing:1}}>
+                    SCANNING...
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+
+          {err&&(
+            <div style={{marginTop:12,padding:"10px 14px",background:"#1a0000",
+              border:"1px solid #3a0000",borderRadius:8,fontSize:11,color:"#e85d2a",
+              textAlign:"center",lineHeight:1.5}}>
+              {err}
+            </div>
+          )}
+        </div>
+
+        <div style={{marginTop:28,fontSize:9,color:"#252525",letterSpacing:1.5,
+          textAlign:"center",lineHeight:1.8,maxWidth:300}}>
+          {stillValid
+            ? <>ACCESS ACTIVE UNTIL {expDt.toLocaleString("en-US",{month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"}).toUpperCase()}</>
+            : <>CONTACT ADMIN FOR ACCESS CODE · USE GYMLOG KEYGEN APP</>
+          }
+        </div>
+      </div>
+    );
+  }
+
   // ── RENDER ────────────────────────────────────────────────
+  // ── RENDER ────────────────────────────────────────────────
+  if (locked) return <LockScreen/>;
   return(
     <div style={{height:"100vh",background:C.bg,color:C.text,...T,fontSize:14,overflow:"hidden",display:"flex",flexDirection:"column"}}>
       <style>{`
