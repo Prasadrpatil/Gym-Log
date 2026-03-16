@@ -1082,7 +1082,8 @@ export default function App(){
             {usersOpen&&<>
               {data.users.map(u=>{
                 const isActive=u.id===data.activeUserId;
-                const totalSessions=u.muscles.flatMap(m=>m.exercises.flatMap(e=>e.sessions)).length;
+                const allUserSess=u.muscles.flatMap(m=>m.exercises.flatMap(e=>e.sessions.filter(s=>s.sets&&s.sets.length>0)));
+                const totalSessions=new Set(allUserSess.map(s=>s.date)).size; // unique training days = sessions
                 return(
                   <div key={u.id} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 18px",
                     background:isActive?"#141a00":"transparent",
@@ -1898,68 +1899,135 @@ export default function App(){
 
   // ── SETS LOGGER (inline input + rest timer) ──────────────
 
-  // ── TIMER BAR — shared between SetsLogger & ExerciseDetail ──
-  // State lives in timerMap ref keyed by sid. No storage.
+  // ── TIMER BAR — stopwatch + countdown rest timer ────────────
   function TimerBar({sid}){
-    const MAX_SEC=30*60; // 30 minutes — then auto-stop and clear
     const [,forceRender]=useState(0);
     const tick=()=>forceRender(n=>n+1);
+    const restRef=useRef({}); // sid -> {restSec, restEnd, ringing}
+
+    // Play a short ring using Web Audio API
+    function playRing(){
+      try{
+        const ctx=new (window.AudioContext||window.webkitAudioContext)();
+        // Two-tone chime
+        [[880,0,0.15],[1100,0.18,0.12],[880,0.35,0.2]].forEach(([freq,delay,dur])=>{
+          const osc=ctx.createOscillator();
+          const gain=ctx.createGain();
+          osc.connect(gain); gain.connect(ctx.destination);
+          osc.type="sine"; osc.frequency.value=freq;
+          gain.gain.setValueAtTime(0,ctx.currentTime+delay);
+          gain.gain.linearRampToValueAtTime(0.4,ctx.currentTime+delay+0.02);
+          gain.gain.exponentialRampToValueAtTime(0.001,ctx.currentTime+delay+dur);
+          osc.start(ctx.currentTime+delay);
+          osc.stop(ctx.currentTime+delay+dur+0.05);
+        });
+        setTimeout(()=>ctx.close(),1000);
+      }catch{}
+    }
 
     useEffect(()=>{
       let iv=null;
-      if(timerMap.current[sid]?.running){
+      const running=timerMap.current[sid]?.running || restRef.current[sid]?.restEnd;
+      if(running){
         iv=setInterval(()=>{
+          // Check rest countdown
+          const rs=restRef.current[sid];
+          if(rs?.restEnd && !rs.ringing){
+            if(Date.now()>=rs.restEnd){
+              rs.ringing=true;
+              playRing();
+              setTimeout(()=>{ if(restRef.current[sid]) restRef.current[sid].ringing=false; tick(); },3000);
+            }
+          }
+          // Auto-stop stopwatch at 30 min
           const t=timerMap.current[sid];
-          if(!t?.running){ clearInterval(iv); return; }
-          const totalElapsed=t.elapsed+Math.floor((Date.now()-t.start)/1000);
-          if(totalElapsed>=MAX_SEC){
-            // Hit 30 min — stop and wipe
-            delete timerMap.current[sid];
-            clearInterval(iv);
+          if(t?.running){
+            const totalElapsed=t.elapsed+Math.floor((Date.now()-t.start)/1000);
+            if(totalElapsed>=30*60){ delete timerMap.current[sid]; }
           }
           forceRender(n=>n+1);
         },1000);
       }
       return ()=>{ if(iv) clearInterval(iv); };
-    },[sid, timerMap.current[sid]?.running]);
+    },[sid, timerMap.current[sid]?.running, restRef.current[sid]?.restEnd]);
 
     const t=timerMap.current[sid]||{running:false,elapsed:0,start:null};
     const elapsed=t.running ? t.elapsed+Math.floor((Date.now()-t.start)/1000) : t.elapsed;
     const mm=String(Math.floor(elapsed/60)).padStart(2,"0");
     const ss=String(elapsed%60).padStart(2,"0");
-    const active=t.running||t.elapsed>0;
+    const swActive=t.running||t.elapsed>0;
 
-    const start=()=>{
-      timerMap.current[sid]={running:true,elapsed:t.elapsed,start:Date.now()};
+    const swStart=()=>{ timerMap.current[sid]={running:true,elapsed:t.elapsed,start:Date.now()}; tick(); };
+    const swStop=()=>{ const cur=timerMap.current[sid]||{elapsed:0}; timerMap.current[sid]={running:false,elapsed:cur.elapsed+Math.floor((Date.now()-cur.start)/1000),start:null}; tick(); };
+    const swReset=()=>{ delete timerMap.current[sid]; tick(); };
+
+    // Rest timer
+    const rs=restRef.current[sid]||{};
+    const restEnd=rs.restEnd||null;
+    const restRemaining=restEnd ? Math.max(0,Math.ceil((restEnd-Date.now())/1000)) : null;
+    const restDone=restEnd && restRemaining===0;
+    const restActive=restEnd && restRemaining>0;
+    const restMm=restRemaining!=null?String(Math.floor(restRemaining/60)).padStart(2,"0"):"00";
+    const restSs=restRemaining!=null?String(restRemaining%60).padStart(2,"0"):"00";
+
+    const startRest=(sec)=>{
+      restRef.current[sid]={restSec:sec, restEnd:Date.now()+sec*1000, ringing:false};
       tick();
     };
-    const stop=()=>{
-      const cur=timerMap.current[sid]||{elapsed:0};
-      timerMap.current[sid]={running:false,elapsed:cur.elapsed+Math.floor((Date.now()-cur.start)/1000),start:null};
-      tick();
-    };
-    const reset=()=>{ delete timerMap.current[sid]; tick(); };
+    const cancelRest=()=>{ delete restRef.current[sid]; tick(); };
 
     return(
-      <div style={{display:"flex",alignItems:"center",gap:8,padding:"8px 14px",
-        background:"#0a0a0a",borderBottom:"1px solid #141414",flexShrink:0}}>
-        <div style={{background:active?"#0d1400":"#0d0d0d",border:`1px solid ${active?"#1e3000":"#1a1a1a"}`,
-          borderRadius:8,padding:"6px 12px",minWidth:68,textAlign:"center",flexShrink:0}}>
-          <div style={{fontSize:17,fontWeight:700,color:active?C.green:"#2a2a2a",letterSpacing:2,fontVariantNumeric:"tabular-nums"}}>{mm}:{ss}</div>
-          <div style={{fontSize:7,color:"#2a3a10",letterSpacing:2,textTransform:"uppercase",marginTop:1}}>rest</div>
+      <div style={{background:"#0a0a0a",borderBottom:"1px solid #141414",flexShrink:0}}>
+        {/* Row 1: stopwatch + rest timer display */}
+        <div style={{display:"flex",alignItems:"center",gap:8,padding:"8px 14px"}}>
+          {/* Stopwatch */}
+          <div style={{background:swActive?"#0d1400":"#0d0d0d",border:`1px solid ${swActive?"#1e3000":"#1a1a1a"}`,
+            borderRadius:8,padding:"5px 10px",minWidth:64,textAlign:"center",flexShrink:0}}>
+            <div style={{fontSize:16,fontWeight:700,color:swActive?C.green:"#2a2a2a",letterSpacing:2,fontVariantNumeric:"tabular-nums"}}>{mm}:{ss}</div>
+            <div style={{fontSize:7,color:"#2a3a10",letterSpacing:2,textTransform:"uppercase",marginTop:1}}>stopwatch</div>
+          </div>
+          <button style={{...bkBtn,padding:"9px 13px",fontSize:14,
+            color:t.running?"#ff8800":"#6a9a00",borderColor:t.running?"#3a1a00":"#1e3000"}}
+            onClick={t.running?swStop:swStart}>{t.running?"⏸":"▶"}</button>
+          {!t.running&&t.elapsed>0&&(
+            <button style={{...bkBtn,padding:"9px 13px",fontSize:13,color:"#555",borderColor:"#1a1a1a"}}
+              onClick={swReset}>↺</button>
+          )}
+
+          {/* Rest countdown (shown when active) */}
+          {(restActive||restDone)&&(
+            <div style={{flex:1,display:"flex",alignItems:"center",gap:8,justifyContent:"flex-end"}}>
+              <div style={{background:restDone?"#1a0d00":restActive?"#001a0d":"#0d0d0d",
+                border:`1px solid ${restDone?"#cc4400":restActive?"#006633":"#1a1a1a"}`,
+                borderRadius:8,padding:"5px 10px",minWidth:64,textAlign:"center"}}>
+                <div style={{fontSize:16,fontWeight:700,letterSpacing:2,fontVariantNumeric:"tabular-nums",
+                  color:restDone?C.red:C.green}}>{restMm}:{restSs}</div>
+                <div style={{fontSize:7,letterSpacing:2,textTransform:"uppercase",marginTop:1,
+                  color:restDone?"#883300":"#2a3a10"}}>{restDone?"rest done!":"rest"}</div>
+              </div>
+              <button style={{...bkBtn,padding:"9px 13px",fontSize:13,color:"#555",borderColor:"#1a1a1a"}}
+                onClick={cancelRest}>✕</button>
+            </div>
+          )}
+          {!restActive&&!restDone&&(
+            <div style={{flex:1,fontSize:9,color:"#252525",letterSpacing:1,textAlign:"right",textTransform:"uppercase"}}>
+              set rest timer →
+            </div>
+          )}
         </div>
-        <button style={{...bkBtn,padding:"10px 14px",fontSize:15,
-          color:t.running?"#ff8800":"#6a9a00",
-          borderColor:t.running?"#3a1a00":"#1e3000"}}
-          onClick={t.running?stop:start}>
-          {t.running?"⏸":"▶"}
-        </button>
-        {!t.running&&t.elapsed>0&&(
-          <button style={{...bkBtn,padding:"10px 14px",fontSize:14,color:"#555",borderColor:"#1a1a1a"}}
-            onClick={reset}>↺</button>
-        )}
-        <div style={{flex:1,fontSize:9,color:"#252525",letterSpacing:1,textTransform:"uppercase",textAlign:"right"}}>
-          {t.running?`stops at 30:00`:active?"stopped":"▶ to time rest"}
+        {/* Row 2: rest presets */}
+        <div style={{display:"flex",gap:6,padding:"0 14px 8px"}}>
+          <div style={{fontSize:9,color:"#2a2a2a",letterSpacing:1,textTransform:"uppercase",
+            alignSelf:"center",marginRight:4,flexShrink:0}}>Rest:</div>
+          {[[60,"1m"],[90,"1:30"],[120,"2m"],[180,"3m"],[300,"5m"]].map(([sec,label])=>(
+            <button key={sec} onClick={()=>startRest(sec)}
+              style={{...bkBtn,padding:"6px 10px",fontSize:10,
+                color: restRef.current[sid]?.restSec===sec&&restActive?"#000":"#5a8a00",
+                background: restRef.current[sid]?.restSec===sec&&restActive?C.green:"transparent",
+                borderColor: restRef.current[sid]?.restSec===sec&&restActive?"#c8f72c":"#1e3000"}}>
+              {label}
+            </button>
+          ))}
         </div>
       </div>
     );
@@ -2155,9 +2223,9 @@ export default function App(){
     const today=new Date().toISOString().slice(0,10);
 
     const statsItems=[
-      {label:"Sessions",value:weekSessions||"-",sub:"this week"},
+      {label:"Sessions",value:weekSessions||0,sub:"this week"},
       {label:"Streak",value:streak?`${streak}d`:"0d",sub:streak>=3?"🔥 on fire!":streak>0?"keep going":"start today"},
-      {label:"Exercises",value:weekTotalEx||"-",sub:"this week"},
+      {label:"Exercises",value:weekTotalEx||0,sub:"this week"},
     ];
 
     return (
