@@ -1,0 +1,31 @@
+{
+  "expo": {
+    "name": "GymLog",
+    "slug": "gymlog",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0a0a0a"
+    },
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.gymlog.app",
+      "infoPlist": {
+        "NSCameraUsageDescription": "GymLog uses the camera to scan QR codes."
+      }
+    },
+    "android": {
+      "package": "com.gymlog.app"
+    },
+    "plugins": [],
+    "extra": {
+      "eas": {
+        "projectId": "gymlog"
+      }
+    }
+  }
+}

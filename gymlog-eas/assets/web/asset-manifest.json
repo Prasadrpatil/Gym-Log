@@ -1,0 +1,18 @@
+{
+  "files": {
+    "main.js": "/static/js/main.45454825.js",
+    "static/js/808.ccd2abec.chunk.js": "/static/js/808.ccd2abec.chunk.js",
+    "static/js/970.ff3e89df.chunk.js": "/static/js/970.ff3e89df.chunk.js",
+    "static/media/abs.png": "/static/media/abs.84414ec3dfb9aca943c0.png",
+    "static/media/biceps.png": "/static/media/biceps.bba7bda662cf70037df8.png",
+    "static/media/back.png": "/static/media/back.35445efa3d0c5216a413.png",
+    "static/media/chest.png": "/static/media/chest.25ff78b4e0ad1c0d22fa.png",
+    "static/media/triceps.png": "/static/media/triceps.1df6b254ec7d289a9b31.png",
+    "static/media/shoulders.png": "/static/media/shoulders.310b74bffbc8e46d7d09.png",
+    "static/media/legs.png": "/static/media/legs.06083812f13cf30af111.png",
+    "index.html": "/index.html"
+  },
+  "entrypoints": [
+    "static/js/main.45454825.js"
+  ]
+}
